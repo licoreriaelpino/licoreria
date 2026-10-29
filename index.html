@@ -184,6 +184,7 @@ canvas{width:100%;background:var(--panel);border:1px solid var(--line);border-ra
       <div class="tcell"><div class="v" id="tkCosto">–</div><div class="k">Costo de lo vendido</div></div>
       <div class="tcell"><div class="v" id="tkBruta">–</div><div class="k">Utilidad bruta</div></div>
       <div class="tcell"><div class="v" id="tkGastos">–</div><div class="k">Gastos</div></div>
+      <div class="tcell"><div class="v" id="tkMermas">–</div><div class="k">Mermas y faltantes</div></div>
       <div class="tcell"><div class="v" id="tkEfe">–</div><div class="k">💵 Efectivo</div></div>
       <div class="tcell"><div class="v" id="tkYape">–</div><div class="k">📱 Yape</div></div>
     </div>
@@ -269,6 +270,12 @@ canvas{width:100%;background:var(--panel);border:1px solid var(--line);border-ra
   <div class="subnav" id="ivSub">
     <button class="on" data-iv="contar" onclick="subInvent('contar')">📝 Contar</button>
     <button data-iv="hist" onclick="subInvent('hist')">📜 Historial</button>
+    <button data-iv="bajas" onclick="subInvent('bajas')">🗑 Bajas</button>
+  </div>
+  <div id="ivBajas" class="hide">
+    <button class="btn" style="width:100%;margin-bottom:12px" onclick="modalBaja()">🗑 Registrar baja de producto</button>
+    <div class="card"><p class="muted" style="font-size:12px;margin:0">Para productos que salen sin venderse: <b>vencidos, rotos, consumo propio, regalos</b> o <b>devueltos al proveedor con reembolso</b>. Descuenta el stock y la pérdida aparece en el Panel como merma.<br>Si el proveedor te <b>cambia</b> el producto vencido por uno nuevo igual, no registres nada: el stock no cambia.</p></div>
+    <div id="bajasList"></div>
   </div>
   <div id="ivContar">
     <div class="card">
@@ -310,6 +317,14 @@ canvas{width:100%;background:var(--panel);border:1px solid var(--line);border-ra
 
 <section class="page" id="pg-gastos">
   <button class="btn" style="width:100%;margin-bottom:14px" onclick="modalGasto()">+ Registrar gasto</button>
+  <div class="card">
+    <div class="row" style="justify-content:space-between;align-items:center">
+      <h2 style="font-size:16px;margin:0">🔁 Gastos fijos mensuales</h2>
+      <button class="btn sec sm" onclick="modalGastoFijo()">+ Agregar</button>
+    </div>
+    <p class="muted" style="font-size:12px;margin:6px 0">Se registran solos cada mes en el día indicado.</p>
+    <div id="fijosList"></div>
+  </div>
   <div class="chips" id="gastosChips"></div>
   <div class="card"><div class="row" style="justify-content:space-between">
     <span class="muted" id="gastosResLbl">Total</span><b class="sora neg" id="gastosTotal">–</b>
@@ -444,6 +459,7 @@ async function iniciarApp(){
   if(USER.rol==='vendedor') document.getElementById('btnNuevoProd').classList.add('hide');
   document.getElementById('cierreFecha').value = hoyISO();
   await cargarCatalogo();
+  generarGastosFijos().catch(()=>{});
   irA('vender');
 }
 async function cargarCatalogo(){
@@ -467,7 +483,7 @@ function irA(tab){
   if(tab==='fiados') cargarFiados();
   if(tab==='compras') subCompras('reg');
   if(tab==='combos') renderCombos();
-  if(tab==='gastos') cargarGastos();
+  if(tab==='gastos'){ cargarGastos(); cargarFijos(); }
   if(tab==='ajustes') renderUsuarios();
 }
 
@@ -701,10 +717,16 @@ function rangoFechas(){
 async function cargarPanel(){
   const [f1, f2, lbl] = rangoFechas();
   document.getElementById('tkLbl').textContent = 'Utilidad neta · ' + lbl;
-  const [ventasR, gastosR] = await Promise.all([
+  const [ventasR, gastosR, bajasR, conteosR] = await Promise.all([
     sbAll({ select:'id,data', tipo:'eq.venta', 'data->>fecha':'gte.'+f1+'T00:00:00' }),
-    sbAll({ select:'id,data', tipo:'eq.gasto', 'data->>fecha':'gte.'+f1 })
+    sbAll({ select:'id,data', tipo:'eq.gasto', 'data->>fecha':'gte.'+f1 }),
+    sbAll({ select:'data', tipo:'eq.baja', 'data->>fecha':'gte.'+f1+'T00:00:00' }),
+    sbAll({ select:'data', tipo:'eq.conteo', 'data->>fecha':'gte.'+f1+'T00:00:00' })
   ]);
+  const enRango = d => d.fecha <= f2+'T23:59:59';
+  // mermas = pérdida de bajas + faltantes netos de los conteos (el ajuste inicial no cuenta)
+  const tm = bajasR.filter(b=>enRango(b.data)).reduce((s,b)=>s+(Number(b.data.perdida)||0),0)
+           - conteosR.filter(c=>enRango(c.data) && c.data.categoria!=='Ajuste inicial').reduce((s,c)=>s+(Number(c.data.valor_diferencia)||0),0);
   const ventas = ventasR.filter(x=> x.data.fecha <= f2+'T23:59:59' && !x.data.anulada);
   const gastos = gastosR.filter(x=> x.data.fecha <= f2 && x.data.categoria !== 'DEVOLUCION_JUNTA');
   let tv=0, tc=0, efe=0, yap=0, sinCosto=0;
@@ -729,9 +751,10 @@ async function cargarPanel(){
   document.getElementById('tkCosto').textContent = S(tc);
   document.getElementById('tkBruta').textContent = S(tv-tc);
   document.getElementById('tkGastos').textContent = S(tg);
+  document.getElementById('tkMermas').textContent = S(tm);
   document.getElementById('tkEfe').textContent = S(efe);
   document.getElementById('tkYape').textContent = S(yap);
-  const neta = tv-tc-tg;
+  const neta = tv-tc-tg-tm;
   const el = document.getElementById('tkNeta'); el.textContent = S(neta);
   el.style.color = neta>=0 ? 'var(--pos)' : 'var(--neg)';
   document.getElementById('tkWarn').textContent = sinCosto ? `⚠ ${sinCosto} ítems vendidos sin costo registrado — la utilidad real puede ser menor.` : '';
@@ -798,11 +821,12 @@ async function cargarCaja(){
   const desdeEfe = arqEfe ? arqEfe.data.fecha : null;
   const desdeYap = arqYap ? arqYap.data.fecha : null;
   const desdeMin = [desdeEfe, desdeYap].filter(Boolean).sort()[0] || '2000-01-01T00:00:00';
-  const [ventasR, comprasR, gastosR, fiadosR] = await Promise.all([
+  const [ventasR, comprasR, gastosR, fiadosR, bajasR] = await Promise.all([
     sbAll({ select:'data', tipo:'eq.venta', 'data->>fecha':'gte.'+desdeMin }),
     sbAll({ select:'data', tipo:'eq.compra', 'data->>fecha':'gte.'+desdeMin.slice(0,10) }),
     sbAll({ select:'data', tipo:'eq.gasto', 'data->>fecha':'gte.'+desdeMin.slice(0,10) }),
-    sbAll({ select:'data', tipo:'eq.fiado' })
+    sbAll({ select:'data', tipo:'eq.fiado' }),
+    sbAll({ select:'data', tipo:'eq.baja' })
   ]);
   function saldo(metodo, arq){
     if(!arq) return null;
@@ -814,6 +838,7 @@ async function cargarCaja(){
     movs.forEach(({data:m})=>{ if(m.tipo!=='arqueo' && m.metodo===metodo && m.fecha > desde)
       s += (m.tipo==='aporte'? Number(m.monto) : -Number(m.monto)); });
     fiadosR.forEach(({data:f})=>(f.pagos||[]).forEach(p=>{ if(p.fecha > desde) s += (metodo==='EFECTIVO'?(p.efectivo||0):(p.yape||0)); }));
+    bajasR.forEach(({data:b})=>{ if(b.reembolso && b.fuente===metodo && b.fecha > desde) s += Number(b.reembolso)||0; });
     return s;
   }
   const sE = saldo('EFECTIVO', arqEfe), sY = saldo('YAPE', arqYap);
@@ -911,7 +936,9 @@ function subInvent(v){
   document.querySelectorAll('#ivSub button').forEach(b=>b.classList.toggle('on', b.dataset.iv===v));
   document.getElementById('ivContar').classList.toggle('hide', v!=='contar');
   document.getElementById('ivHist').classList.toggle('hide', v!=='hist');
+  document.getElementById('ivBajas').classList.toggle('hide', v!=='bajas');
   if(v==='hist') pintarHistorialConteos();
+  if(v==='bajas') cargarBajas();
 }
 async function abrirInventario(){
   await cargarCatalogo();
@@ -1090,6 +1117,140 @@ async function guardarEnvase(){
 async function borrarEnvase(id){
   if(!confirm('¿Eliminar este movimiento de envases?')) return;
   await sb('DELETE', { id:'eq.'+id }); cargarEnvases();
+}
+
+
+/* ============ GASTOS FIJOS MENSUALES ============ */
+const mesesEntre = (desde, hasta) => { const out=[]; let [y,m]=desde.split('-').map(Number); const [y2,m2]=hasta.split('-').map(Number);
+  while(y<y2 || (y===y2 && m<=m2)){ out.push(y+'-'+String(m).padStart(2,'0')); m++; if(m>12){m=1;y++;} } return out; };
+async function generarGastosFijos(){
+  const [fijos, gastos] = await Promise.all([ sbAll({ select:'id,data', tipo:'eq.gasto_fijo' }), sbAll({ select:'data', tipo:'eq.gasto' }) ]);
+  const hechos = new Set(gastos.filter(g=>g.data.fijo_id).map(g=>g.data.fijo_id+'|'+g.data.mes));
+  const hoy = hoyISO(); let creados = 0;
+  for(const {id, data:f} of fijos){
+    if(f.activo===false) continue;
+    for(const mes of mesesEntre(f.desde, hoy.slice(0,7))){
+      const dia = String(Math.min(Number(f.dia)||1, 28)).padStart(2,'0');
+      const fecha = mes+'-'+dia;
+      if(fecha > hoy || hechos.has(id+'|'+mes)) continue;
+      await sb('POST', {}, { tipo:'gasto', data:{ fecha, concepto:f.concepto+' ('+mes+')', monto:Number(f.monto), categoria:f.categoria,
+        fuente:f.fuente, fijo_id:id, mes, automatico:true } });
+      creados++;
+    }
+  }
+  if(creados) toast(`🔁 ${creados} gasto(s) fijo(s) registrado(s)`);
+}
+async function cargarFijos(){
+  const fijos = await sbAll({ select:'id,data', tipo:'eq.gasto_fijo' });
+  document.getElementById('fijosList').innerHTML = fijos.map(({id, data:f})=>`<div class="citem">
+      <span class="grow"><b>${esc(f.concepto)}</b> ${f.activo===false?'<span class="tag">pausado</span>':''}<br>
+      <span class="muted" style="font-size:12px">Día ${f.dia} de cada mes · ${esc(f.categoria)} · ${esc(f.fuente)} · desde ${f.desde}</span></span>
+      <b class="neg">${S(f.monto)}</b>&nbsp;<button class="btn sec sm" onclick="modalGastoFijo('${id}')">Editar</button></div>`).join('')
+    || '<p class="muted" style="font-size:13px">Sin gastos fijos.</p>';
+  window._fijos = Object.fromEntries(fijos.map(f=>[f.id, f.data]));
+}
+function modalGastoFijo(id){
+  const f = id ? window._fijos[id] : { concepto:'', monto:'', dia:1, categoria:'SERVICIOS', fuente:'EFECTIVO', desde:hoyISO().slice(0,7), activo:true };
+  abrirModal(`<h3>🔁 ${id?'Editar':'Nuevo'} gasto fijo</h3>
+    <div class="fld"><label>Concepto</label><input id="gfCon" value="${esc(f.concepto)}" placeholder="Ej: Luz"></div>
+    <div class="row">
+      <div class="fld grow"><label>Monto S/</label><input id="gfMon" type="number" step="0.1" value="${f.monto}"></div>
+      <div class="fld grow"><label>Día del mes</label><input id="gfDia" type="number" min="1" max="28" value="${f.dia}"></div>
+    </div>
+    <div class="row">
+      <div class="fld grow"><label>Categoría</label><select id="gfCat">${CATS.map(c=>`<option ${c===f.categoria?'selected':''}>${c}</option>`).join('')}</select></div>
+      <div class="fld grow"><label>Se paga con</label><select id="gfFue">${['EFECTIVO','YAPE','EXTERNO'].map(c=>`<option ${c===f.fuente?'selected':''}>${c}</option>`).join('')}</select></div>
+    </div>
+    <div class="fld"><label>Desde el mes</label><input id="gfDes" type="month" value="${f.desde}"></div>
+    <div class="fld"><label><input type="checkbox" id="gfAct" ${f.activo!==false?'checked':''} style="width:auto"> Activo</label></div>
+    <div class="row">${id?`<button class="btn danger grow" onclick="borrarGastoFijo('${id}')">Eliminar</button>`:''}
+      <button class="btn sec grow" onclick="cerrarModal()">Cancelar</button>
+      <button class="btn grow" onclick="guardarGastoFijo(${id?`'${id}'`:'null'})">Guardar</button></div>`);
+}
+async function guardarGastoFijo(id){
+  const data = { concepto:document.getElementById('gfCon').value.trim(), monto:parseFloat(document.getElementById('gfMon').value),
+    dia:parseInt(document.getElementById('gfDia').value)||1, categoria:document.getElementById('gfCat').value,
+    fuente:document.getElementById('gfFue').value, desde:document.getElementById('gfDes').value, activo:document.getElementById('gfAct').checked };
+  if(!data.concepto || !data.monto || !data.desde) return toast('Completa concepto, monto y mes de inicio');
+  if(id) await sb('PATCH', { id:'eq.'+id }, { data }); else await sb('POST', {}, { tipo:'gasto_fijo', data });
+  cerrarModal(); await generarGastosFijos(); cargarGastos(); cargarFijos();
+}
+async function borrarGastoFijo(id){
+  if(!confirm('¿Eliminar este gasto fijo? Los gastos ya registrados se mantienen.')) return;
+  await sb('DELETE', { id:'eq.'+id }); cerrarModal(); cargarGastos(); cargarFijos();
+}
+
+/* ============ BAJAS DE PRODUCTOS (mermas) ============ */
+const MOTIVOS_BAJA = ['Vencido','Roto o dañado','Consumo propio','Regalo o promoción','Devuelto al proveedor (con reembolso)'];
+async function cargarBajas(){
+  const rows = await sbAll({ select:'id,data', tipo:'eq.baja' });
+  rows.sort((a,b)=>(b.data.fecha||'').localeCompare(a.data.fecha||''));
+  const mes = hoyISO().slice(0,7);
+  const delMes = rows.filter(r=>(r.data.fecha||'').startsWith(mes)).reduce((s,r)=>s+(Number(r.data.perdida)||0),0);
+  document.getElementById('bajasList').innerHTML =
+    `<div class="card"><div class="row" style="justify-content:space-between"><span class="muted">Pérdida por bajas este mes (al costo)</span><b class="sora neg">${S(delMes)}</b></div></div>` +
+    (rows.length ? '<div class="scroll"><table><tr><th>Fecha</th><th>Producto</th><th>Motivo</th><th class="right">Pérdida</th><th></th></tr>' +
+      rows.slice(0,60).map(({id, data:b})=>`<tr><td class="muted" style="font-size:12px">${(b.fecha||'').slice(0,10)}</td>
+        <td>${b.cantidad}× ${esc(b.nombre)}${b.variante?' · '+esc(b.variante):''}${b.nota?`<br><span class="muted" style="font-size:11px">${esc(b.nota)}</span>`:''}</td>
+        <td><span class="tag">${esc(b.motivo)}</span>${b.reembolso?`<br><span class="pos" style="font-size:11px">reembolso ${S(b.reembolso)}</span>`:''}</td>
+        <td class="right neg">${S(b.perdida)}</td>
+        <td class="right">${USER.rol==='admin'?`<button class="btn danger sm" onclick="borrarBaja('${id}')">✕</button>`:''}</td></tr>`).join('') + '</table></div>'
+      : '<p class="muted">Todavía no hay bajas registradas.</p>');
+}
+function modalBaja(){
+  const prods = [...PROD.values()].filter(p=>p.activo!==false).sort((a,b)=>a.nombre.localeCompare(b.nombre));
+  abrirModal(`<h3>🗑 Baja de producto</h3>
+    <div class="fld"><label>Producto</label><select id="bjProd" onchange="ajustarModalBaja()">
+      ${prods.map(p=>`<option value="${p.id}">${esc(p.nombre)} (stock ${stockDe(p)})</option>`).join('')}</select></div>
+    <div class="fld hide" id="bjVarBox"><label>Sabor / variante</label><select id="bjVar"></select></div>
+    <div class="row">
+      <div class="fld grow"><label>Cantidad</label><input id="bjCant" type="number" min="1" step="1" value="1" oninput="ajustarModalBaja()"></div>
+      <div class="fld grow"><label>Motivo</label><select id="bjMot" onchange="ajustarModalBaja()">${MOTIVOS_BAJA.map(m=>`<option>${m}</option>`).join('')}</select></div>
+    </div>
+    <div class="row hide" id="bjReemBox">
+      <div class="fld grow"><label>Reembolso recibido S/</label><input id="bjReem" type="number" step="0.1" oninput="ajustarModalBaja()"></div>
+      <div class="fld grow"><label>Entró por</label><select id="bjFue"><option>EFECTIVO</option><option>YAPE</option></select></div>
+    </div>
+    <div class="fld"><label>Nota (opcional)</label><input id="bjNota" placeholder="Ej: lote vencido en agosto"></div>
+    <div class="card" id="bjRes" style="margin:8px 0"></div>
+    <div class="row"><button class="btn sec grow" onclick="cerrarModal()">Cancelar</button>
+    <button class="btn grow" onclick="guardarBaja()">Registrar baja</button></div>`);
+  ajustarModalBaja();
+}
+function ajustarModalBaja(){
+  const p = PROD.get(document.getElementById('bjProd').value);
+  const vb = document.getElementById('bjVarBox');
+  vb.classList.toggle('hide', !tieneVars(p));
+  if(tieneVars(p) && vb.dataset.p !== p.id){ document.getElementById('bjVar').innerHTML = p.variantes.map(v=>`<option>${esc(v.nombre)}</option>`).join(''); vb.dataset.p = p.id; }
+  const devol = document.getElementById('bjMot').value.startsWith('Devuelto');
+  document.getElementById('bjReemBox').classList.toggle('hide', !devol);
+  const q = Number(document.getElementById('bjCant').value)||0, cu = Number(p.costo_promedio)||0;
+  const reem = devol ? (Number(document.getElementById('bjReem').value)||0) : 0;
+  document.getElementById('bjRes').innerHTML = `<div class="row" style="justify-content:space-between"><span class="muted">Costo de lo que sale</span><b>${S(q*cu)}</b></div>`
+    + (devol ? `<div class="row" style="justify-content:space-between"><span class="muted">Reembolso</span><b class="pos">${S(reem)}</b></div>` : '')
+    + `<div class="row" style="justify-content:space-between"><span>Pérdida</span><b class="neg">${S(q*cu-reem)}</b></div>`;
+}
+async function guardarBaja(){
+  const p = PROD.get(document.getElementById('bjProd').value);
+  const cantidad = parseInt(document.getElementById('bjCant').value);
+  if(!cantidad || cantidad<1) return toast('Ingresa la cantidad');
+  const motivo = document.getElementById('bjMot').value; const devol = motivo.startsWith('Devuelto');
+  const reembolso = devol ? (parseFloat(document.getElementById('bjReem').value)||0) : 0;
+  const variante = tieneVars(p) ? document.getElementById('bjVar').value : null;
+  const costo_unit = Number(p.costo_promedio)||0;
+  try{
+    await ajustarStock(p.id, -cantidad, variante);
+    await sb('POST', {}, { tipo:'baja', data:{ fecha:ahoraISO(), producto_id:p.id, nombre:p.nombre, variante, cantidad, costo_unit, motivo,
+      reembolso, fuente: devol ? document.getElementById('bjFue').value : null, perdida:+(cantidad*costo_unit - reembolso).toFixed(2),
+      nota:document.getElementById('bjNota').value.trim(), usuario:USER.nombre } });
+    cerrarModal(); toast(`✅ Baja registrada: ${cantidad}× ${p.nombre}`); cargarBajas();
+  }catch(e){ toast('❌ Error: '+e.message); }
+}
+async function borrarBaja(id){
+  if(!confirm('¿Eliminar esta baja? El stock se devolverá.')) return;
+  const [row] = await sb('GET', { select:'id,data', id:'eq.'+id });
+  await ajustarStock(row.data.producto_id, row.data.cantidad, row.data.variante);
+  await sb('DELETE', { id:'eq.'+id }); cargarBajas();
 }
 
 /* ============ FIADOS ============ */
@@ -1463,7 +1624,7 @@ async function guardarCombo(id){
 
 /* ============ GASTOS ============ */
 const CATS = ['SERVICIOS','ALQUILER','TRANSPORTE','EQUIPOS','MEJORAS LOCAL','MANTENIMIENTO','INSUMOS','MATERIALES','LIMPIEZA','OTROS'];
-const CATS_FILTRO = ['TODOS','SERVICIOS','ALQUILER','TRANSPORTE','EQUIPOS','MATERIALES','LIMPIEZA','OTROS','INVERSION','DEVOLUCION_JUNTA'];
+const CATS_FILTRO = ['TODOS','SERVICIOS','MEJORAS LOCAL','MANTENIMIENTO','INSUMOS','TRANSPORTE','EQUIPOS','ALQUILER','MATERIALES','LIMPIEZA','OTROS','INVERSION','DEVOLUCION_JUNTA'];
 let GASTOS_CACHE = [];
 async function cargarGastos(){
   GASTOS_CACHE = await sbAll({ select:'id,data', tipo:'eq.gasto', order:'data->>fecha.desc' });
