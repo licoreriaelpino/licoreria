@@ -82,6 +82,11 @@ td{padding:10px 8px;border-bottom:1px solid var(--line)}
 .citem{display:flex;align-items:center;gap:10px;padding:7px 0;border-bottom:1px solid var(--line);font-size:14px}
 .qbtn{width:34px;height:34px;border-radius:9px;background:var(--panel2);border:1px solid var(--line);font-size:17px;font-weight:700}
 .mtoggle{display:flex;gap:8px;margin:10px 0}
+.ojo{background:none;border:0;font-size:15px;padding:0 4px;cursor:pointer;vertical-align:middle;line-height:1}
+.oculto{font-size:0!important;letter-spacing:0!important}
+.oculto::after{content:'S/ ••••';font-size:var(--msz,20px)}
+body.priv-caja .mmov{font-size:0!important}
+body.priv-caja .mmov::after{content:'••••';font-size:14px}
 .mtoggle button{flex:1;padding:11px;border-radius:11px;border:1px solid var(--line);background:var(--panel2);font-weight:700;font-size:13px}
 .mtoggle button.efe.on{background:var(--pos);color:#10230c;border-color:var(--pos)}
 .mtoggle button.yap.on{background:var(--yape);color:#170f2b;border-color:var(--yape)}
@@ -142,6 +147,7 @@ canvas{width:100%;background:var(--panel);border:1px solid var(--line);border-ra
   <div class="row">
     <input id="buscar" placeholder="🔍 Buscar producto o combo..." oninput="renderGrid()">
     <button class="micbtn" id="micBtn" onclick="voz()">🎤</button>
+    <button class="micbtn" id="ojoGeneral" onclick="togglePrivTodo()" title="Ocultar o mostrar los montos">👁</button>
     <button class="micbtn" onclick="modalEnvase('garantia')" title="Garantía de envases">🍾</button>
   </div>
   <div id="prodGrid"></div>
@@ -238,10 +244,10 @@ canvas{width:100%;background:var(--panel);border:1px solid var(--line);border-ra
 
 <section class="page" id="pg-caja">
   <div class="row" style="margin-bottom:12px;align-items:stretch">
-    <div class="cajaCard"><div class="muted" style="font-size:12px">💵 EFECTIVO EN CAJA</div>
+    <div class="cajaCard"><div class="muted" style="font-size:12px">💵 EFECTIVO EN CAJA <button class="ojo" data-k="caja" onclick="togglePriv('caja')">👁</button></div>
       <div class="saldo pos" id="cajaEfe">–</div>
       <div class="muted" style="font-size:11px" id="cajaEfeDesde"></div></div>
-    <div class="cajaCard"><div class="muted" style="font-size:12px">📱 YAPE (licorería)</div>
+    <div class="cajaCard"><div class="muted" style="font-size:12px">📱 YAPE (licorería) <button class="ojo" data-k="yape" onclick="togglePriv('yape')">👁</button></div>
       <div class="saldo" style="color:var(--yape)" id="cajaYape">–</div>
       <div class="muted" style="font-size:11px" id="cajaYapeDesde"></div></div>
   </div>
@@ -326,7 +332,7 @@ canvas{width:100%;background:var(--panel);border:1px solid var(--line);border-ra
     <button onclick="fiadosFiltro('todos')">Todos</button>
   </div>
   <div class="card"><div class="row" style="justify-content:space-between">
-    <span class="muted">Total por cobrar</span><b class="sora neg" id="fiadosTotal">–</b>
+    <span class="muted">Total por cobrar <button class="ojo" data-k="fiados" onclick="togglePriv('fiados')">👁</button></span><b class="sora neg" id="fiadosTotal">–</b>
   </div></div>
   <div id="fiadosList"></div>
   </div>
@@ -351,7 +357,7 @@ canvas{width:100%;background:var(--panel);border:1px solid var(--line);border-ra
   </div>
   <p class="muted" style="font-size:11px;margin:0 0 12px">El nivel compara el stock con lo que se vende: 10 Pilsen pueden durar 2 días y 10 Red Label varios meses.</p>
   <div class="card"><div class="row" style="justify-content:space-between">
-    <span class="muted">Valor del inventario (al costo)</span><b class="sora" id="invValor">–</b>
+    <span class="muted">Valor del inventario (al costo) <button class="ojo" data-k="inv" onclick="togglePriv('inv')">👁</button></span><b class="sora" id="invValor">–</b>
   </div></div>
   <div class="scroll"><table id="invTable"></table></div>
 </section>
@@ -428,7 +434,7 @@ canvas{width:100%;background:var(--panel);border:1px solid var(--line);border-ra
   </div>
   <div class="chips" id="gastosChips"></div>
   <div class="card"><div class="row" style="justify-content:space-between">
-    <span class="muted" id="gastosResLbl">Total</span><b class="sora neg" id="gastosTotal">–</b>
+    <span class="muted"><span id="gastosResLbl">Total</span> <button class="ojo" data-k="gastos" onclick="togglePriv('gastos')">👁</button></span><b class="sora neg" id="gastosTotal">–</b>
   </div></div>
   <div class="scroll"><table id="gastosTable"></table></div>
 </section>
@@ -536,6 +542,7 @@ function logout(){ location.reload(); }
 const TABS = [
   {id:'vender', ic:'🛒', nom:'Vender', roles:['admin','vendedor']},
   {id:'panel', ic:'📊', nom:'Panel', roles:['admin']},
+  {id:'panel', ic:'🧾', nom:'Ventas', roles:['vendedor']},
   {id:'caja', ic:'💰', nom:'Caja', roles:['admin']},
   {id:'inv', ic:'📦', nom:'Stock', roles:['admin','vendedor']},
   {id:'inventario', ic:'📋', nom:'Inventario', roles:['admin','vendedor']},
@@ -559,6 +566,7 @@ async function iniciarApp(){
     nav.appendChild(b);
   });
   if(USER.rol==='vendedor') document.getElementById('btnNuevoProd').classList.add('hide');
+  Object.keys(PRIV).forEach(k=>PRIV[k] = false); aplicarPriv();
   document.getElementById('cierreFecha').value = hoyISO();
   await cargarCatalogo();
   generarGastosFijos().catch(()=>{});
@@ -578,7 +586,7 @@ function irA(tab){
   document.querySelectorAll('#nav button').forEach(b=>b.classList.toggle('on', b.dataset.tab===tab));
   document.getElementById('cartBar').classList.toggle('hide', tab!=='vender' || CART.length===0);
   if(tab==='vender') renderGrid();
-  if(tab==='panel') cargarPanel();
+  if(tab==='panel') subPanel(USER.rol==='admin' ? PANEL_SUB : 'lista');
   if(tab==='caja'){ cargarCaja(); cargarEnvases(); }
   if(tab==='inv') renderInv();
   if(tab==='inventario') abrirInventario();
@@ -964,7 +972,7 @@ async function cargarCaja(){
   document.getElementById('movsTable').innerHTML =
     '<tr><th>Fecha</th><th>Movimiento</th><th class="right">Monto</th><th></th></tr>' +
     lineas.slice(0,30).map(l=>`<tr><td class="muted" style="font-size:12px">${l.f.slice(0,10)}</td><td>${l.txt}</td>
-      <td class="right ${l.monto>=0?'pos':'neg'}">${S(l.monto)}</td>
+      <td class="right mmov ${l.monto>=0?'pos':'neg'}">${S(l.monto)}</td>
       <td class="right">${l.borrable?`<button class="btn danger sm" onclick="borrarMov('${l.id}')">✕</button>`:''}</td></tr>`).join('')
     || '<tr><td class="muted">Sin movimientos aún</td></tr>';
 }
@@ -1075,7 +1083,7 @@ async function cargarYapeRango(){
     </div>
     <div class="scroll"><table>
       <tr><th>Día</th><th class="right">Yapes</th><th class="right">Total</th><th>Cierre</th></tr>
-      ${dias.filter(d=>porDia[d] || cierreDe[d]).map(d=>{
+      ${dias.filter(d=>porDia[d] || cierreDe[d]).reverse().map(d=>{
         const l = porDia[d]||[], t = l.reduce((a,y)=>a+y.monto,0), c = cierreDe[d];
         const est = c ? (c.conforme ? '<span class="pos">✔ conforme</span>' : `<span class="neg">✎ diferencia</span>${c.obs?`<br><span class="muted" style="font-size:11px">${esc(c.obs)}</span>`:''}`) : '<span class="muted">pendiente</span>';
         return `<tr><td><details><summary>${fechaCorta(d)}</summary>${l.map(y=>`<div class="citem" style="font-size:12px"><span class="muted">${y.fecha.slice(11,16)}</span><span class="grow">${esc(y.det)}</span><b>${S(y.monto)}</b></div>`).join('')}</details></td>
@@ -1542,6 +1550,8 @@ const nomProv = t => String(t||'').trim().toUpperCase().replace(/\s+/g,' ');
 /* ============ LISTA DE VENTAS ============ */
 let PANEL_SUB = 'resumen', LV_CACHE = [];
 function subPanel(v){
+  if(USER.rol!=='admin') v = 'lista';
+  document.getElementById('pnSub').classList.toggle('hide', USER.rol!=='admin');
   PANEL_SUB = v;
   document.querySelectorAll('#pnSub button').forEach(b=>b.classList.toggle('on', b.dataset.pn===v));
   document.getElementById('pnLista').classList.toggle('hide', v!=='lista');
@@ -1581,15 +1591,15 @@ function pintarListaVentas(){
     <div class="row" style="justify-content:space-between;font-size:13px"><span>🤝 Fiado (por cobrar)</span><b>${S(fia)}</b></div>
     ${validas.length?`<div class="row" style="justify-content:space-between;font-size:13px"><span class="muted">Ticket promedio</span><span>${S(tot/validas.length)}</span></div>`:''}`;
   const admin = USER.rol==='admin';
-  document.getElementById('lvTabla').innerHTML = '<tr><th>Fecha</th><th>Detalle</th><th class="right">Total</th>'+(admin?'<th></th>':'')+'</tr>' +
+  document.getElementById('lvTabla').innerHTML = '<tr><th>Fecha</th><th>Detalle</th><th class="right">Total</th><th></th></tr>' +
     filas.slice(0,400).map(({id, data:v})=>{
       const p = pagoDe(v);
       const pago = v.metodo==='MIXTO' ? `MIXTO · ${S(p.efectivo)} + ${S(p.yape)}` : v.metodo;
       return `<tr style="${v.anulada?'opacity:.45':''}"><td class="muted" style="font-size:12px;white-space:nowrap">${fechaCorta(v.fecha)}</td>
         <td>${(v.items||[]).map(i=>`${i.cantidad}× ${esc(i.nombre)}${i.variante?' ('+esc(i.variante)+')':''}`).join(', ')}<br>
-          <span class="tag">${pago}</span> <span class="muted" style="font-size:11px">${esc(v.usuario||'')}</span>${v.anulada?' <span class="tag rojo">anulada</span>':''}${v.obs?`<br><span class="muted" style="font-size:11px">${esc(v.obs)}</span>`:''}</td>
+          <span class="tag">${pago}</span> <span class="muted" style="font-size:11px">${esc(v.usuario||'')}</span>${v.anulada?' <span class="tag rojo">anulada</span>':''}${v.editada?` <span class="tag warn" title="${esc((v.ediciones||[]).map(e=>fechaCorta(e.fecha)+' '+e.usuario).join(' · '))}">editada</span>`:''}${v.obs?`<br><span class="muted" style="font-size:11px">${esc(v.obs)}</span>`:''}</td>
         <td class="right"><b>${S(v.total)}</b></td>
-        ${admin?`<td class="right">${v.anulada?'':`<button class="btn danger sm" onclick="anularVenta('${id}')">Anular</button>`}</td>`:''}</tr>`;
+        <td class="right" style="white-space:nowrap">${v.anulada?'':`<button class="btn sec sm" onclick="editarVenta('${id}')">✎ Editar</button>${admin?` <button class="btn danger sm" onclick="anularVenta('${id}')">Anular</button>`:''}`}</td></tr>`;
     }).join('') + (filas.length>400?`<tr><td colspan="4" class="muted">Se muestran 400 de ${filas.length}. Usa “Excel” para ver todas.</td></tr>`:'')
     + (filas.length?'':'<tr><td class="muted">No hay ventas con esos filtros.</td></tr>');
 }
@@ -1601,6 +1611,192 @@ function csvVentas(){
      ...[...filas].reverse().map(({data:v})=>{ const p = pagoDe(v); return [v.fecha.slice(0,10), v.fecha.slice(11,16),
        (v.items||[]).map(i=>`${i.cantidad}x ${i.nombre}${i.variante?' ('+i.variante+')':''}`).join(' | '), v.metodo,
        v.metodo==='FIADO'?0:p.efectivo.toFixed(2), v.metodo==='FIADO'?0:p.yape.toFixed(2), Number(v.total).toFixed(2), v.usuario||'', v.anulada?'SI':'', v.obs||'']; })]);
+}
+
+
+/* ============ EDITAR VENTA (enlazada a stock, caja y fiados) ============ */
+// Consumo de inventario de una lista de ítems: producto (y sabor) → unidades
+function consumoItems(items){
+  const c = {};
+  (items||[]).forEach(it=>{
+    if(it.tipo==='combo') (it.componentes || (COMBOS.get(it.id)||{}).items || []).forEach(k=>{ const key = k.producto_id+'|'; c[key] = (c[key]||0) + k.cantidad*it.cantidad; });
+    else { const key = it.id+'|'+(it.variante||''); c[key] = (c[key]||0) + Number(it.cantidad||0); }
+  });
+  return c;
+}
+async function editarVenta(id){
+  const [row] = await sb('GET', { select:'id,data', id:'eq.'+id });
+  if(!row) return toast('No se encontró la venta');
+  const v = row.data;
+  if(v.anulada) return toast('Esta venta está anulada');
+  const fiados = await sbAll({ select:'id,data', tipo:'eq.fiado', 'data->>venta_id':'eq.'+id });
+  const p = pagoDe(v);
+  window._ev = { id, orig:v, fiados, items: JSON.parse(JSON.stringify(v.items||[])), metodo: v.metodo==='OTRO' ? 'EFECTIVO' : v.metodo,
+    efe:p.efectivo, yap:p.yape, cliente: fiados[0] ? fiados[0].data.cliente : '' };
+  const opts = [...COMBOS.values()].filter(c=>c.activo!==false).sort((a,b)=>a.nombre.localeCompare(b.nombre)).map(c=>`<option value="c|${c.id}">🎁 ${esc(c.nombre)}</option>`).join('')
+    + [...PROD.values()].filter(x=>x.activo!==false).sort((a,b)=>a.nombre.localeCompare(b.nombre)).map(x=>`<option value="p|${x.id}">${esc(x.nombre)}</option>`).join('');
+  abrirModal(`<h3>✎ Editar venta · ${fechaCorta(v.fecha)}</h3>
+    <p class="muted" style="font-size:12px;margin-bottom:8px">Corrige lo que se llevó el cliente. Al guardar, el stock, la caja y los fiados se ajustan solos.</p>
+    <div id="evItems"></div>
+    <div class="row" style="gap:6px;margin:8px 0">
+      <select id="evAdd" class="grow" onchange="evVarOpts()"><option value="">+ Agregar producto o combo…</option>${opts}</select>
+      <select id="evVar" class="hide"></select>
+      <button class="btn sm" onclick="evAgregar()">Agregar</button>
+    </div>
+    <div class="card" style="margin:6px 0"><div class="row" style="justify-content:space-between"><span>Total</span><b class="sora" id="evTotal" style="font-size:20px"></b></div>
+      <div class="muted" style="font-size:12px" id="evAntes"></div></div>
+    <div class="mtoggle" id="evMet">${['EFECTIVO','YAPE','MIXTO','FIADO'].map(m=>`<button data-m="${m}" class="${{EFECTIVO:'efe',YAPE:'yap',MIXTO:'mix',FIADO:'fia'}[m]}" onclick="evMetodo('${m}')">${{EFECTIVO:'💵 Efectivo',YAPE:'📱 Yape',MIXTO:'➗ Mixto',FIADO:'🤝 Fiado'}[m]}</button>`).join('')}</div>
+    <div class="row hide" id="evMix" style="gap:8px;margin-bottom:8px">
+      <div class="grow"><label class="muted" style="font-size:12px">Efectivo</label><input id="evEfe" type="number" step="0.1" oninput="evMixAuto('efe')"></div>
+      <div class="grow"><label class="muted" style="font-size:12px">Yape</label><input id="evYap" type="number" step="0.1" oninput="evMixAuto('yap')"></div>
+    </div>
+    <div class="fld hide" id="evFia"><label>¿A nombre de quién?</label><input id="evCli" value="${esc(window._ev.cliente)}" list="evCliDL">
+      <datalist id="evCliDL">${[...new Set((FIADOS_CACHE||[]).map(f=>f.data.cliente))].map(c=>`<option value="${esc(c)}">`).join('')}</datalist></div>
+    <p class="neg" style="font-size:12px;margin-bottom:8px" id="evAviso"></p>
+    <div class="row"><button class="btn sec grow" onclick="cerrarModal()">Cancelar</button>
+    <button class="btn grow" onclick="guardarEdicion()">Guardar cambios</button></div>`);
+  document.getElementById('evAntes').textContent = `Antes: ${S(v.total)} · ${v.metodo}`;
+  evMetodo(window._ev.metodo, true);
+  evPintar();
+}
+function evTotal(){ return +window._ev.items.reduce((t,i)=>t + Number(i.precio_unit)*Number(i.cantidad), 0).toFixed(2); }
+function evPintar(){
+  const ev = window._ev;
+  document.getElementById('evItems').innerHTML = ev.items.map((it,i)=>`<div class="citem">
+      <span class="grow">${it.tipo==='combo'?'🎁 ':''}${esc(it.nombre)}${it.variante?' <span class="muted">('+esc(it.variante)+')</span>':''}<br><span class="muted" style="font-size:11px">${S(it.precio_unit)} c/u</span></span>
+      <button class="btn sec sm" onclick="evCant(${i},-1)">−</button><b style="min-width:26px;text-align:center">${it.cantidad}</b><button class="btn sec sm" onclick="evCant(${i},1)">＋</button>
+      <b style="min-width:70px;text-align:right">${S(it.precio_unit*it.cantidad)}</b>
+      <button class="btn danger sm" onclick="evCant(${i},-${it.cantidad})">✕</button></div>`).join('')
+    || '<p class="muted" style="font-size:13px">Sin productos. Agrega al menos uno (si la venta no existió, pide que la anulen).</p>';
+  document.getElementById('evTotal').textContent = S(evTotal());
+  if(ev.metodo==='MIXTO') evMixAuto('efe');
+  evAvisos();
+}
+function evCant(i, d){
+  const it = window._ev.items[i];
+  it.cantidad = Math.max(0, Number(it.cantidad) + d);
+  if(it.cantidad===0) window._ev.items.splice(i,1);
+  evPintar();
+}
+function evVarOpts(){
+  const val = document.getElementById('evAdd').value, sel = document.getElementById('evVar');
+  const p = val.startsWith('p|') ? PROD.get(val.slice(2)) : null;
+  if(p && tieneVars(p)){ sel.innerHTML = p.variantes.map(v=>`<option>${esc(v.nombre)}</option>`).join(''); sel.classList.remove('hide'); }
+  else sel.classList.add('hide');
+}
+function evAgregar(){
+  const val = document.getElementById('evAdd').value; if(!val) return;
+  const ev = window._ev;
+  if(val.startsWith('c|')){
+    const c = COMBOS.get(val.slice(2));
+    const ex = ev.items.find(i=>i.tipo==='combo' && i.id===c.id && !/\(mod\.\)/.test(i.nombre));
+    if(ex) ex.cantidad++;
+    else ev.items.push({ id:c.id, nombre:c.nombre, tipo:'combo', cantidad:1, precio_unit:Number(c.precio_venta), costo_unit:costoCombo(c.items), componentes:JSON.parse(JSON.stringify(c.items||[])) });
+  } else {
+    const p = PROD.get(val.slice(2));
+    const variante = tieneVars(p) ? document.getElementById('evVar').value : null;
+    const ex = ev.items.find(i=>i.tipo==='producto' && i.id===p.id && (i.variante||null)===variante);
+    if(ex) ex.cantidad++;
+    else ev.items.push({ id:p.id, nombre:p.nombre, variante, tipo:'producto', cantidad:1, precio_unit:Number(p.precio_venta), costo_unit:Number(p.costo_promedio)||0 });
+  }
+  document.getElementById('evAdd').value=''; evVarOpts(); evPintar();
+}
+function evMetodo(m, inicial){
+  const ev = window._ev; ev.metodo = m;
+  document.querySelectorAll('#evMet button').forEach(b=>b.classList.toggle('on', b.dataset.m===m));
+  document.getElementById('evMix').classList.toggle('hide', m!=='MIXTO');
+  document.getElementById('evFia').classList.toggle('hide', m!=='FIADO');
+  if(m==='MIXTO'){
+    const t = evTotal();
+    if(inicial || !(ev.efe+ev.yap)){ document.getElementById('evEfe').value = ev.efe||''; document.getElementById('evYap').value = ev.yap||''; }
+    if(!document.getElementById('evEfe').value) document.getElementById('evEfe').value = +(t/2).toFixed(2);
+    evMixAuto('efe');
+  }
+  evAvisos();
+}
+function evMixAuto(desde){
+  const t = evTotal();
+  if(desde==='efe'){ const e = parseFloat(document.getElementById('evEfe').value)||0; document.getElementById('evYap').value = +(t-e).toFixed(2); }
+  else { const y = parseFloat(document.getElementById('evYap').value)||0; document.getElementById('evEfe').value = +(t-y).toFixed(2); }
+}
+function evAvisos(){
+  const ev = window._ev, av = [];
+  const pagado = ev.fiados.reduce((t,f)=>t + (f.data.pagos||[]).reduce((a,p)=>a+(Number(p.monto)||0),0), 0);
+  if(ev.orig.metodo==='FIADO' && ev.metodo!=='FIADO' && pagado>0) av.push(`Este fiado ya tiene pagos por ${S(pagado)}: no se puede cambiar a otra forma de pago.`);
+  if(ev.metodo==='FIADO' && pagado > evTotal()+0.009) av.push(`Ya pagó ${S(pagado)} de este fiado: el nuevo total no puede ser menor.`);
+  if(ev.orig.fecha.slice(0,10) !== hoyISO() && (ev.metodo!==ev.orig.metodo || Math.abs(evTotal()-ev.orig.total)>0.009))
+    av.push('La venta es de otro día: si ese día ya se hizo el cierre de Yape o el arqueo, el monto cambiará.');
+  document.getElementById('evAviso').textContent = av.join(' ');
+}
+async function guardarEdicion(){
+  const ev = window._ev, old = ev.orig;
+  const items = ev.items.filter(i=>Number(i.cantidad)>0);
+  if(!items.length) return toast('Agrega al menos un producto. Si la venta no existió, pide que la anulen.');
+  const total = evTotal();
+  let pago;
+  if(ev.metodo==='EFECTIVO') pago = { efectivo:total, yape:0 };
+  else if(ev.metodo==='YAPE') pago = { efectivo:0, yape:total };
+  else if(ev.metodo==='FIADO') pago = { efectivo:0, yape:0 };
+  else {
+    const e = parseFloat(document.getElementById('evEfe').value)||0, y = parseFloat(document.getElementById('evYap').value)||0;
+    if(Math.abs(e+y-total)>0.01) return toast(`⚠ Efectivo + Yape debe sumar ${S(total)}`);
+    pago = { efectivo:+e.toFixed(2), yape:+y.toFixed(2) };
+  }
+  const pagado = ev.fiados.reduce((t,f)=>t + (f.data.pagos||[]).reduce((a,p)=>a+(Number(p.monto)||0),0), 0);
+  const cliente = (document.getElementById('evCli').value||'').trim();
+  if(ev.metodo==='FIADO' && !cliente) return toast('Escribe a nombre de quién es el fiado');
+  if(old.metodo==='FIADO' && ev.metodo!=='FIADO' && pagado>0) return toast('Este fiado ya tiene pagos: no se puede cambiar la forma de pago');
+  if(ev.metodo==='FIADO' && pagado > total+0.009) return toast(`Ya pagó ${S(pagado)}: el total no puede ser menor`);
+  const cambios = JSON.stringify(consumoItems(old.items))!==JSON.stringify(consumoItems(items)) || Math.abs(total-old.total)>0.009
+    || ev.metodo!==old.metodo || JSON.stringify(pago)!==JSON.stringify(pagoDe(old)) || (ev.metodo==='FIADO' && cliente!==ev.cliente);
+  if(!cambios) return cerrarModal();
+  try{
+    // 1) la venta
+    const data = { ...old, items, total, costo_total:+items.reduce((t,i)=>t+(Number(i.costo_unit)||0)*i.cantidad,0).toFixed(4), metodo:ev.metodo, pago, editada:true,
+      ediciones:[...(old.ediciones||[]), { fecha:ahoraISO(), usuario:USER.nombre, antes:{ total:old.total, metodo:old.metodo,
+        items:(old.items||[]).map(i=>`${i.cantidad}x ${i.nombre}${i.variante?' ('+i.variante+')':''}`).join(', ') } }] };
+    await sb('PATCH', { id:'eq.'+ev.id }, { data });
+    // 2) el stock: solo la diferencia entre lo que salió antes y lo que sale ahora
+    const a = consumoItems(old.items), b = consumoItems(items);
+    for(const k of new Set([...Object.keys(a), ...Object.keys(b)])){
+      const delta = (b[k]||0) - (a[k]||0);
+      if(Math.abs(delta) < 1e-9) continue;
+      const [pid, variante] = k.split('|');
+      await ajustarStock(pid, -delta, variante || undefined);
+    }
+    // 3) el fiado
+    const itemsF = items.map(i=>({ id:i.id, nombre:i.nombre, cantidad:i.cantidad, tipo:i.tipo, variante:i.variante||null, precio_unit:i.precio_unit }));
+    if(ev.metodo==='FIADO'){
+      if(ev.fiados.length){
+        const f = ev.fiados[0];
+        await sb('PATCH', { id:'eq.'+f.id }, { data:{ ...f.data, cliente, items:itemsF, total, saldo:+(total-pagado).toFixed(2) } });
+      } else await sb('POST', {}, { tipo:'fiado', data:{ cliente, venta_id:ev.id, items:itemsF, total, saldo:total, fecha:old.fecha, pagos:[], usuario:USER.nombre } });
+    } else for(const f of ev.fiados) await sb('DELETE', { id:'eq.'+f.id });
+    cerrarModal(); toast('✅ Venta corregida · stock ajustado');
+    if(document.getElementById('pg-panel').classList.contains('on')) cargarListaVentas();
+  }catch(e){ toast('❌ Error: '+e.message); }
+}
+
+
+/* ============ OCULTAR MONTOS ============ */
+// Por defecto todo visible. Solo vive en memoria: al volver a abrir la app, todo se ve otra vez.
+const PRIV_EL = { caja:'cajaEfe', yape:'cajaYape', inv:'invValor', fiados:'fiadosTotal', gastos:'gastosTotal' };
+const PRIV = { caja:false, yape:false, inv:false, fiados:false, gastos:false };
+function aplicarPriv(){
+  Object.entries(PRIV_EL).forEach(([k, id])=>{
+    const el = document.getElementById(id); if(!el) return;
+    if(PRIV[k] && !el.classList.contains('oculto')){ el.style.setProperty('--msz', getComputedStyle(el).fontSize); el.classList.add('oculto'); }
+    if(!PRIV[k]) el.classList.remove('oculto');
+    document.querySelectorAll(`.ojo[data-k="${k}"]`).forEach(b=>{ b.textContent = PRIV[k] ? '🙈' : '👁'; });
+  });
+  document.getElementById('ojoGeneral').textContent = Object.values(PRIV).some(Boolean) ? '🙈' : '👁';
+  document.body.classList.toggle('priv-caja', PRIV.caja || PRIV.yape);   // los movimientos de caja también revelan los saldos
+}
+function togglePriv(k){ PRIV[k] = !PRIV[k]; aplicarPriv(); }
+function togglePrivTodo(){
+  const ocultar = !Object.values(PRIV).some(Boolean);
+  Object.keys(PRIV).forEach(k=>PRIV[k] = ocultar);
+  aplicarPriv(); toast(ocultar ? '🙈 Montos ocultos' : '👁 Montos visibles');
 }
 
 /* ============ FIADOS ============ */
