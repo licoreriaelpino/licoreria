@@ -787,6 +787,11 @@ async function anularVenta(id){
   if(!confirm('¿Anular esta venta? Se devolverá el stock.')) return;
   const [row] = await sb('GET', { select:'id,data', id:'eq.'+id });
   const v = row.data;
+  if(v.metodo==='FIADO'){   // la deuda se va junto con la venta
+    const fs = await sbAll({ select:'id,data', tipo:'eq.fiado', 'data->>venta_id':'eq.'+id });
+    if(fs.some(f=>(f.data.pagos||[]).length)) return alert('Esta venta fiada ya tiene pagos registrados. Primero revisa la deuda en Fiados.');
+    for(const f of fs) await sb('DELETE', { id:'eq.'+f.id });
+  }
   for(const it of (v.items||[])){
     if(it.tipo==='producto') await ajustarStock(it.id, it.cantidad, it.variante);
     else{
@@ -1095,7 +1100,13 @@ function modalEnvase(tipo){
   abrirModal(`<h3>🍾 Envases</h3>
     <div class="fld"><label>Movimiento</label><select id="eTipo" onchange="ajustarModalEnvase()">
       ${tipos.map(t=>`<option value="${t}" ${t===tipo?'selected':''}>${ENV_TXT[t]}</option>`).join('')}</select></div>
-    <div class="fld" id="eBotBox"><label>Botellas</label><input id="eBot" type="number" min="1" step="1" value="1" oninput="calcEnvase()"></div>
+    <div id="eBotBox">
+      <div class="fld"><label>Garantía por botella</label>
+        <div class="chips" id="ePreChips" style="margin:0">${[1,1.5,2].map(v=>`<button type="button" class="${v===GARANTIA_BOTELLA?'on':''}" onclick="setPrecioEnvase(${v})">S/ ${v.toFixed(2)}</button>`).join('')}
+          <input id="ePre" type="number" step="0.1" min="0" value="${GARANTIA_BOTELLA}" oninput="setPrecioEnvase(null)" style="width:90px" title="Otro monto"></div>
+        <p class="muted" style="font-size:11px;margin-top:4px">Cerveza S/ 1.50 · gaseosas según la botella. Puedes escribir otro monto.</p></div>
+      <div class="fld"><label>Botellas</label><input id="eBot" type="number" min="1" step="1" value="1" oninput="calcEnvase()"></div>
+    </div>
     <div class="fld"><label id="eMonLbl">Monto S/</label><input id="eMon" type="number" step="0.1"></div>
     <div class="fld"><label>Nota (opcional)</label><input id="eCon" placeholder="Ej: Sr. Juan, 3 botellas Pilsen"></div>
     <div class="row"><button class="btn sec grow" onclick="cerrarModal()">Cancelar</button>
@@ -1108,10 +1119,17 @@ function ajustarModalEnvase(){
   document.getElementById('eMonLbl').textContent = t==='arqueo' ? 'Dinero contado en el frasco S/' : 'Monto S/';
   if(t==='arqueo') document.getElementById('eMon').value=''; else calcEnvase();
 }
+function setPrecioEnvase(v){
+  if(v!==null) document.getElementById('ePre').value = v;
+  const p = Number(document.getElementById('ePre').value);
+  document.querySelectorAll('#ePreChips button').forEach(b=>b.classList.toggle('on', Number(b.textContent.replace('S/','')) === p));
+  calcEnvase();
+}
 function calcEnvase(){
   const t = document.getElementById('eTipo').value;
+  const pre = Number(document.getElementById('ePre').value) || 0;
   if(t==='garantia' || t==='devolucion')
-    document.getElementById('eMon').value = ((Number(document.getElementById('eBot').value)||0) * GARANTIA_BOTELLA).toFixed(2);
+    document.getElementById('eMon').value = ((Number(document.getElementById('eBot').value)||0) * pre).toFixed(2);
 }
 async function guardarEnvase(){
   const tipo = document.getElementById('eTipo').value;
@@ -1119,7 +1137,8 @@ async function guardarEnvase(){
   if(isNaN(monto) || monto<0) return toast('Ingresa el monto');
   const botellas = tipo==='arqueo' ? null : (parseInt(document.getElementById('eBot').value)||null);
   try{
-    await sb('POST', {}, { tipo:'envase', data:{ tipo, monto, botellas, concepto:document.getElementById('eCon').value.trim(),
+    const precio_botella = tipo==='garantia'||tipo==='devolucion' ? (Number(document.getElementById('ePre').value)||null) : null;
+    await sb('POST', {}, { tipo:'envase', data:{ tipo, monto, botellas, precio_botella, concepto:document.getElementById('eCon').value.trim(),
       fecha:ahoraISO(), usuario:USER.nombre } });
     cerrarModal(); toast('✅ '+ENV_TXT[tipo]+' registrada');
     if(document.getElementById('pg-caja').classList.contains('on')) cargarEnvases();
