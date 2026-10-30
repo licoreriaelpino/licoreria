@@ -2075,10 +2075,12 @@ async function modalCompra(){
   const opts = [...PROD.values()].filter(p=>p.activo!==false).sort((a,b)=>a.nombre.localeCompare(b.nombre))
     .map(p=>`<option value="${p.id}">${esc(p.nombre)}</option>`).join('');
   abrirModal(`<h3>Registrar compra</h3>
-    <div class="fld"><label>Proveedor</label><select id="fProvSel" onchange="document.getElementById('fProvNuevo').classList.toggle('hide', this.value!=='__otro')">
+    <div class="fld"><label>Proveedor</label><select id="fProvSel" onchange="window._provManual=true; document.getElementById('fProvNuevo').classList.toggle('hide', this.value!=='__otro')">
       <option value="">— elige proveedor —</option>${D.nombres.map(n=>`<option ${n===keep.prov?'selected':''}>${esc(n)}</option>`).join('')}<option value="__otro">➕ Otro proveedor…</option></select>
       <input id="fProvNuevo" class="hide" placeholder="Nombre del proveedor nuevo" style="margin-top:6px"></div>
-    <div class="fld"><label>Producto</label><select id="fProd" onchange="compraProd()">${opts}</select></div>
+    <div class="fld"><label>Producto</label>
+      <input id="fBus" placeholder="🔍 Escribe para buscar (ej: trigo lata)" oninput="filtrarCompraProd()" autocomplete="off">
+      <select id="fProd" onchange="compraProd()" style="margin-top:6px">${opts}</select></div>
     <div class="fld hide" id="fVarBox"><label>Sabor / variante</label><select id="fVar"></select></div>
     <div class="row" style="align-items:flex-end">
       <div class="fld grow"><label>Cajas o paquetes</label><input id="fCaj" type="number" step="1" min="0" oninput="calcCompra('caj')"></div>
@@ -2097,7 +2099,19 @@ async function modalCompra(){
     <div class="row" style="gap:8px"><button class="btn sec" onclick="cerrarModal()">Cancelar</button>
     <button class="btn sec grow" onclick="guardarCompra(true)">Guardar y otro</button>
     <button class="btn grow" onclick="guardarCompra(false)">Guardar</button></div>`);
-  compraProd(!!keep.prov);
+  window._provManual = !!keep.prov;   // si el usuario elige el proveedor (o viene de "Guardar y otro"), ya no se cambia solo
+  compraProd();
+}
+// Buscador del producto: filtra la lista y elige el primer resultado
+function filtrarCompraProd(){
+  const norm = t => t.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g,'');
+  const q = norm(document.getElementById('fBus').value||'');
+  const sel = document.getElementById('fProd'), antes = sel.value;
+  const lista = [...PROD.values()].filter(p=>p.activo!==false && (!q || q.split(/\s+/).every(w=>norm(p.nombre).includes(w))))
+    .sort((a,b)=>a.nombre.localeCompare(b.nombre));
+  sel.innerHTML = lista.map(p=>`<option value="${p.id}">${esc(p.nombre)}</option>`).join('') || '<option value="">— sin resultados —</option>';
+  if(lista.some(p=>p.id===antes)) sel.value = antes;
+  else if(lista.length) compraProd(true);
 }
 function compraProd(mantenerProv){
   const p = PROD.get(document.getElementById('fProd').value); if(!p) return;
@@ -2108,10 +2122,10 @@ function compraProd(mantenerProv){
   document.getElementById('fTot').value = '';
   const ref = Number(p.ultimo_costo || p.costo_promedio)||0;
   document.getElementById('fTot').placeholder = ref ? `≈ ${S(ref*uxc)} (último costo)` : '';
-  if(!mantenerProv){
+  if(!window._provManual){
     const ult = COMPRAS_ALL.filter(c=>c.data.producto_id===p.id && c.data.proveedor).sort((a,b)=>b.data.fecha.localeCompare(a.data.fecha))[0];
-    const sel = document.getElementById('fProvSel');
-    if(ult && !sel.value){ const n = nomProv(ult.data.proveedor); if([...sel.options].some(o=>o.value===n)) sel.value = n; }
+    const sel = document.getElementById('fProvSel'), n = ult ? nomProv(ult.data.proveedor) : '';
+    sel.value = [...sel.options].some(o=>o.value===n) ? n : '';
   }
   const box = document.getElementById('fVarBox');
   if(tieneVars(p)){ box.classList.remove('hide'); document.getElementById('fVar').innerHTML = p.variantes.map(v=>`<option>${esc(v.nombre)}</option>`).join(''); }
