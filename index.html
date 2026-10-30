@@ -397,15 +397,17 @@ canvas{width:100%;background:var(--panel);border:1px solid var(--line);border-ra
   </div>
   <div id="comprasProv" class="hide">
     <div class="chips" id="provModo">
-      <button class="on" data-pm="prov" onclick="modoProv('prov')">Por proveedor</button>
-      <button data-pm="prod" onclick="modoProv('prod')">Por producto</button>
+      <button class="on" data-pm="prod" onclick="modoProv('prod')">Por producto</button>
+      <button data-pm="prov" onclick="modoProv('prov')">Por proveedor</button>
     </div>
-    <div id="provPorProv">
+    <div id="provPorProv" class="hide">
       <button class="btn sec sm" style="margin-bottom:12px" onclick="modalProveedor()">+ Proveedor</button>
       <div id="provLista"></div>
     </div>
-    <div id="provPorProd" class="hide">
-    <div class="fld"><label>Producto a comparar</label><select id="provProd" onchange="cargarProveedores()"></select></div>
+    <div id="provPorProd">
+    <div class="fld"><label>Producto a comparar</label>
+      <input id="provBus" placeholder="🔍 Escribe para buscar (ej: pilsen)" oninput="filtrarProvProd()" autocomplete="off">
+      <select id="provProd" onchange="cargarProveedores()" style="margin-top:6px"></select></div>
     <button class="btn sec sm" style="margin-bottom:12px" onclick="modalCotizacion()">+ Agregar cotización</button>
     <div class="scroll" style="margin-bottom:12px"><table id="provResumen"></table></div>
     <div id="provChartBox" class="hide" style="margin-bottom:12px">
@@ -2184,14 +2186,25 @@ async function guardarCompra(seguir){
 }
 
 /* ============ PROVEEDORES ============ */
-let PROV_D = null, PROV_MODO = 'prov';
+let PROV_D = null, PROV_MODO = 'prod', PROV_OPTS = [];
 async function initProveedores(){
   PROV_D = await datosProveedores();
   const sel = document.getElementById('provProd'), prev = sel.value;
   const conCompras = new Set(PROV_D.compras.map(c=>c.data.producto_id));
-  sel.innerHTML = '<option value="">— elige producto —</option>' + [...PROD.values()].filter(p=>conCompras.has(p.id))
-    .sort((a,b)=>a.nombre.localeCompare(b.nombre)).map(p=>`<option value="${p.id}" ${p.id===prev?'selected':''}>${esc(p.nombre)}</option>`).join('');
+  PROV_OPTS = [...PROD.values()].filter(p=>conCompras.has(p.id)).sort((a,b)=>a.nombre.localeCompare(b.nombre)).map(p=>({ id:p.id, nombre:p.nombre }));
+  filtrarProvProd(true, prev);
   modoProv(PROV_MODO);
+}
+// Buscador: filtra la lista mientras escribes; si queda un solo producto, lo abre directo
+function filtrarProvProd(inicial, prev){
+  const sel = document.getElementById('provProd');
+  const q = (document.getElementById('provBus').value||'').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g,'');
+  const norm = t => t.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g,'');
+  const lista = PROV_OPTS.filter(o=>!q || q.split(/\s+/).every(w=>norm(o.nombre).includes(w)));
+  const actual = prev || sel.value;
+  sel.innerHTML = `<option value="">${q ? (lista.length ? '— '+lista.length+' resultado(s) —' : '— sin resultados —') : '— elige producto —'}</option>`
+    + lista.map(o=>`<option value="${o.id}" ${o.id===actual?'selected':''}>${esc(o.nombre)}</option>`).join('');
+  if(!inicial && lista.length===1){ sel.value = lista[0].id; cargarProveedores(); }
 }
 function modoProv(m){
   PROV_MODO = m;
