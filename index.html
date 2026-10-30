@@ -238,15 +238,19 @@ canvas{width:100%;background:var(--panel);border:1px solid var(--line);border-ra
     <div class="scroll" style="margin-top:6px"><table id="envTable"></table></div>
   </div>
   <div class="card">
-    <h2 style="font-size:16px">📱 Cierre Yape del día <span class="muted" style="font-size:12px">(para Rosa)</span></h2>
+    <h2 style="font-size:16px">📜 Movimientos recientes</h2>
+    <div class="scroll"><table id="movsTable"></table></div>
+  </div>
+</section>
+
+<section class="page" id="pg-cierre">
+  <div class="card">
+    <h2 style="font-size:16px">📱 Cierre Yape del día</h2>
+    <p class="muted" style="font-size:13px;margin:4px 0 10px">Al cerrar la tienda: compara lo que registró la app con tu aplicativo Yape.</p>
     <div class="row" style="margin-bottom:10px">
       <input type="date" id="cierreFecha" onchange="cargarCierreYape()">
     </div>
     <div id="cierreBox"></div>
-  </div>
-  <div class="card">
-    <h2 style="font-size:16px">📜 Movimientos recientes</h2>
-    <div class="scroll"><table id="movsTable"></table></div>
   </div>
 </section>
 
@@ -445,6 +449,7 @@ const TABS = [
   {id:'inv', ic:'📦', nom:'Stock', roles:['admin','vendedor']},
   {id:'inventario', ic:'📋', nom:'Inventario', roles:['admin','vendedor']},
   {id:'fiados', ic:'🤝', nom:'Fiados', roles:['admin','vendedor']},
+  {id:'cierre', ic:'📱', nom:'Cierre Yape', roles:['admin','vendedor']},
   {id:'compras', ic:'🚚', nom:'Compras', roles:['admin']},
   {id:'combos', ic:'🎁', nom:'Combos', roles:['admin']},
   {id:'gastos', ic:'🧾', nom:'Gastos', roles:['admin']},
@@ -487,6 +492,7 @@ function irA(tab){
   if(tab==='inv') renderInv();
   if(tab==='inventario') abrirInventario();
   if(tab==='fiados') cargarFiados();
+  if(tab==='cierre') cargarCierreYape();
   if(tab==='compras') subCompras('reg');
   if(tab==='combos') renderCombos();
   if(tab==='gastos'){ cargarGastos(); cargarFijos(); }
@@ -865,7 +871,6 @@ async function cargarCaja(){
       <td class="right ${l.monto>=0?'pos':'neg'}">${S(l.monto)}</td>
       <td class="right">${l.borrable?`<button class="btn danger sm" onclick="borrarMov('${l.id}')">✕</button>`:''}</td></tr>`).join('')
     || '<tr><td class="muted">Sin movimientos aún</td></tr>';
-  cargarCierreYape();
 }
 function modalArqueo(){
   abrirModal(`<h3>📐 Arqueo de caja</h3>
@@ -918,7 +923,7 @@ async function cargarCierreYape(){
     </div>
     ${cerrado
       ? `<span class="tag" style="color:var(--pos);border-color:var(--pos)">✔ Día cerrado ${cerrado.data.conforme?'CONFORME':'CON DIFERENCIA'} — sistema: ${S(cerrado.data.total_sistema)}${cerrado.data.obs?' · '+esc(cerrado.data.obs):''}</span>`
-      : `<p class="muted" style="font-size:13px;margin-bottom:8px">Rosa: compara este total con tu app Yape del día. ¿Coincide?</p>
+      : `<p class="muted" style="font-size:13px;margin-bottom:8px">Compara este total con tu app Yape del día. ¿Coincide?</p>
         <div class="row">
           <button class="btn grow" onclick="cerrarYape('${f}',${total},true)">✔ Conforme</button>
           <button class="btn sec grow" onclick="cerrarYapeDif('${f}',${total})">✎ Hay diferencia</button>
