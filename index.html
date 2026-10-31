@@ -23,6 +23,13 @@
 body{background:var(--bg);color:var(--text);font-family:system-ui,-apple-system,sans-serif;font-size:15px;min-height:100vh}
 .sora{font-family:'Sora',system-ui,sans-serif}
 button{font-family:inherit;cursor:pointer;border:none;background:none;color:inherit}
+.cb{position:relative}
+.cb .cbIn{padding-right:46px}
+.cb .cbBtn{position:absolute;right:2px;top:50%;transform:translateY(-50%);background:none;border:0;color:var(--muted);font-size:20px;padding:6px 12px;cursor:pointer}
+.cb .cbList{position:absolute;left:0;right:0;top:calc(100% + 4px);background:var(--panel2);border:1px solid var(--amber-deep);border-radius:12px;max-height:280px;overflow-y:auto;z-index:400;box-shadow:0 12px 30px rgba(0,0,0,.45)}
+.cb .cbIt{padding:11px 14px;font-size:14px;cursor:pointer;border-bottom:1px solid var(--line)}
+.cb .cbIt:last-child{border-bottom:0}
+.cb .cbIt.on,.cb .cbIt:hover{background:var(--panel);color:var(--amber)}
 input,select,textarea{font-family:inherit;font-size:15px;background:var(--panel2);border:1px solid var(--line);color:var(--text);border-radius:10px;padding:10px 12px;width:100%;outline:none}
 input:focus,select:focus{border-color:var(--amber-deep)}
 ::placeholder{color:var(--muted)}
@@ -406,8 +413,7 @@ canvas{width:100%;background:var(--panel);border:1px solid var(--line);border-ra
     </div>
     <div id="provPorProd">
     <div class="fld"><label>Producto a comparar</label>
-      <input id="provBus" placeholder="🔍 Escribe para buscar (ej: pilsen)" oninput="filtrarProvProd()" autocomplete="off">
-      <select id="provProd" onchange="cargarProveedores()" style="margin-top:6px"></select></div>
+      <select id="provProd" onchange="cargarProveedores()"></select></div>
     <button class="btn sec sm" style="margin-bottom:12px" onclick="modalCotizacion()">+ Agregar cotización</button>
     <div class="scroll" style="margin-bottom:12px"><table id="provResumen"></table></div>
     <div id="provChartBox" class="hide" style="margin-bottom:12px">
@@ -1641,7 +1647,7 @@ async function editarVenta(id){
     <p class="muted" style="font-size:12px;margin-bottom:8px">Corrige lo que se llevó el cliente. Al guardar, el stock, la caja y los fiados se ajustan solos.</p>
     <div id="evItems"></div>
     <div class="row" style="gap:6px;margin:8px 0">
-      <select id="evAdd" class="grow" onchange="evVarOpts()"><option value="">+ Agregar producto o combo…</option>${opts}</select>
+      <div class="grow"><select id="evAdd" onchange="evVarOpts(); if(this.value && document.getElementById('evVar').classList.contains('hide')) evAgregar();"><option value="">+ Agregar producto o combo…</option>${opts}</select></div>
       <select id="evVar" class="hide"></select>
       <button class="btn sm" onclick="evAgregar()">Agregar</button>
     </div>
@@ -1658,6 +1664,7 @@ async function editarVenta(id){
     <div class="row"><button class="btn sec grow" onclick="cerrarModal()">Cancelar</button>
     <button class="btn grow" onclick="guardarEdicion()">Guardar cambios</button></div>`);
   document.getElementById('evAntes').textContent = `Antes: ${S(v.total)} · ${v.metodo}`;
+  hacerCombo('evAdd', '+ Agregar: escribe el producto o toca ▾');
   evMetodo(window._ev.metodo, true);
   evPintar();
 }
@@ -1701,7 +1708,7 @@ function evAgregar(){
     if(ex) ex.cantidad++;
     else ev.items.push({ id:p.id, nombre:p.nombre, variante, tipo:'producto', cantidad:1, precio_unit:Number(p.precio_venta), costo_unit:Number(p.costo_promedio)||0 });
   }
-  document.getElementById('evAdd').value=''; evVarOpts(); evPintar();
+  document.getElementById('evAdd').value=''; syncCombo('evAdd'); evVarOpts(); evPintar();
 }
 function evMetodo(m, inicial){
   const ev = window._ev; ev.metodo = m;
@@ -1799,6 +1806,51 @@ function togglePrivTodo(){
   const ocultar = !Object.values(PRIV).some(Boolean);
   Object.keys(PRIV).forEach(k=>PRIV[k] = ocultar);
   aplicarPriv(); toast(ocultar ? '🙈 Montos ocultos' : '👁 Montos visibles');
+}
+
+
+/* ============ BUSCADOR DESPLEGABLE (un solo renglón) ============ */
+// Convierte un <select> en una casilla donde al escribir aparecen los resultados al instante,
+// con una flecha ▾ para ver toda la lista. El <select> queda oculto y guarda el valor elegido.
+const normTxt = t => String(t||'').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g,'');
+function syncCombo(id){ const s = document.getElementById(id); if(s && s._cbSync) s._cbSync(); }
+function hacerCombo(selId, ph){
+  const sel = document.getElementById(selId); if(!sel || sel._cbSync) return;
+  sel.style.display = 'none';
+  const w = document.createElement('div'); w.className = 'cb';
+  w.innerHTML = `<input class="cbIn" placeholder="${esc(ph||'Escribe para buscar…')}" autocomplete="off" autocorrect="off" spellcheck="false"><button type="button" class="cbBtn" tabindex="-1" aria-label="Ver todos">▾</button><div class="cbList hide"></div>`;
+  sel.after(w);
+  const inp = w.querySelector('input'), list = w.querySelector('.cbList'), btn = w.querySelector('.cbBtn');
+  let items = [], idx = -1;
+  const etiqueta = () => { const o = sel.options[sel.selectedIndex]; return o && o.value ? o.text : ''; };
+  sel._cbSync = () => { inp.value = etiqueta(); };
+  const pintar = () => {
+    list.innerHTML = items.map((o,i)=>`<div class="cbIt${i===idx?' on':''}" data-i="${i}">${esc(o.text)}</div>`).join('') || '<div class="cbIt muted">Sin resultados</div>';
+    const on = list.querySelector('.on'); if(on) on.scrollIntoView({ block:'nearest' });
+  };
+  const abrir = q => {
+    const nq = normTxt(q).trim(), words = nq.split(/\s+/).filter(Boolean);
+    items = [...sel.options].filter(o=>o.value && (o.value==='__otro' || words.every(x=>normTxt(o.text).includes(x))));
+    if(nq) items.sort((a,b)=> (a.value==='__otro') - (b.value==='__otro') || normTxt(b.text).startsWith(nq) - normTxt(a.text).startsWith(nq));
+    idx = nq && items.length ? 0 : -1;
+    pintar(); list.classList.remove('hide');
+  };
+  const cerrar = () => { list.classList.add('hide'); idx = -1; };
+  const elegir = o => { sel.value = o.value; inp.value = o.text; cerrar(); inp.blur(); sel.dispatchEvent(new Event('change')); };
+  inp.addEventListener('input', () => abrir(inp.value));
+  inp.addEventListener('focus', () => { inp.select(); });
+  inp.addEventListener('keydown', e => {
+    if(e.key==='ArrowDown'){ if(list.classList.contains('hide')) abrir(inp.value); idx = Math.min(idx+1, items.length-1); pintar(); e.preventDefault(); }
+    else if(e.key==='ArrowUp'){ idx = Math.max(idx-1, 0); pintar(); e.preventDefault(); }
+    else if(e.key==='Enter'){ const o = items[idx>=0?idx:0]; if(o && !list.classList.contains('hide')){ elegir(o); e.preventDefault(); } }
+    else if(e.key==='Escape'){ cerrar(); inp.value = etiqueta(); }
+  });
+  inp.addEventListener('blur', () => setTimeout(() => { if(document.activeElement!==inp){ cerrar(); inp.value = etiqueta(); } }, 180));
+  btn.addEventListener('pointerdown', e => { e.preventDefault(); if(list.classList.contains('hide')) abrir(''); else cerrar(); });
+  list.addEventListener('pointerdown', e => e.preventDefault());
+  list.addEventListener('click', e => { const it = e.target.closest('.cbIt'); if(it && it.dataset.i!==undefined) elegir(items[+it.dataset.i]); });
+  document.addEventListener('pointerdown', e => { if(!w.contains(e.target)) cerrar(); });
+  inp.value = etiqueta();
 }
 
 /* ============ FIADOS ============ */
@@ -2079,8 +2131,7 @@ async function modalCompra(){
       <option value="">— elige proveedor —</option>${D.nombres.map(n=>`<option ${n===keep.prov?'selected':''}>${esc(n)}</option>`).join('')}<option value="__otro">➕ Otro proveedor…</option></select>
       <input id="fProvNuevo" class="hide" placeholder="Nombre del proveedor nuevo" style="margin-top:6px"></div>
     <div class="fld"><label>Producto</label>
-      <input id="fBus" placeholder="🔍 Escribe para buscar (ej: trigo lata)" oninput="filtrarCompraProd()" autocomplete="off">
-      <select id="fProd" onchange="compraProd()" style="margin-top:6px">${opts}</select></div>
+      <select id="fProd" onchange="compraProd()">${opts}</select></div>
     <div class="fld hide" id="fVarBox"><label>Sabor / variante</label><select id="fVar"></select></div>
     <div class="row" style="align-items:flex-end">
       <div class="fld grow"><label>Cajas o paquetes</label><input id="fCaj" type="number" step="1" min="0" oninput="calcCompra('caj')"></div>
@@ -2100,6 +2151,8 @@ async function modalCompra(){
     <button class="btn sec grow" onclick="guardarCompra(true)">Guardar y otro</button>
     <button class="btn grow" onclick="guardarCompra(false)">Guardar</button></div>`);
   window._provManual = !!keep.prov;   // si el usuario elige el proveedor (o viene de "Guardar y otro"), ya no se cambia solo
+  hacerCombo('fProvSel', 'Escribe el proveedor o toca ▾');
+  hacerCombo('fProd', 'Escribe el producto (ej: trigo lata) o toca ▾');
   compraProd();
 }
 // Buscador del producto: filtra la lista y elige el primer resultado
@@ -2130,6 +2183,7 @@ function compraProd(mantenerProv){
   const box = document.getElementById('fVarBox');
   if(tieneVars(p)){ box.classList.remove('hide'); document.getElementById('fVar').innerHTML = p.variantes.map(v=>`<option>${esc(v.nombre)}</option>`).join(''); }
   else box.classList.add('hide');
+  syncCombo('fProd'); syncCombo('fProvSel');
   calcCompra();
 }
 function calcCompra(origen){
@@ -2207,12 +2261,13 @@ async function initProveedores(){
   const conCompras = new Set(PROV_D.compras.map(c=>c.data.producto_id));
   PROV_OPTS = [...PROD.values()].filter(p=>conCompras.has(p.id)).sort((a,b)=>a.nombre.localeCompare(b.nombre)).map(p=>({ id:p.id, nombre:p.nombre }));
   filtrarProvProd(true, prev);
+  hacerCombo('provProd', 'Escribe el producto (ej: pilsen) o toca ▾'); syncCombo('provProd');
   modoProv(PROV_MODO);
 }
 // Buscador: filtra la lista mientras escribes; si queda un solo producto, lo abre directo
 function filtrarProvProd(inicial, prev){
   const sel = document.getElementById('provProd');
-  const q = (document.getElementById('provBus').value||'').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g,'');
+  const q = ((document.getElementById('provBus')||{}).value||'').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g,'');
   const norm = t => t.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g,'');
   const lista = PROV_OPTS.filter(o=>!q || q.split(/\s+/).every(w=>norm(o.nombre).includes(w)));
   const actual = prev || sel.value;
