@@ -276,6 +276,7 @@ canvas{width:100%;background:var(--panel);border:1px solid var(--line);border-ra
         <button class="btn sm" onclick="modalEnvase('arqueo')">📐 Contar frasco</button>
       </div>
     </div>
+    <div id="vacBox" style="margin-top:10px;padding-top:10px;border-top:1px dashed var(--line,#ddd)"></div>
     <p class="muted" style="font-size:12px;margin-top:8px">Lo que cobras por botella no devuelta va al frasco, no a la caja. Sale cuando el cliente devuelve la botella o cuando compras envases al proveedor.</p>
     <div class="scroll" style="margin-top:6px"><table id="envTable"></table></div>
   </div>
@@ -656,8 +657,52 @@ function agregarCart(id, tipo){
   } else {
     const c = COMBOS.get(id);
     if(!c.items || !c.items.length){ toast('⚠ Este combo no tiene productos definidos. Ve a Combos.'); if(USER.rol!=='admin') return; }
-    pushCart({ id, tipo, nombre:c.nombre, precio:c.precio_venta, cantidad:1, custom:null });
+    const item = { id, tipo, nombre:c.nombre, precio:c.precio_venta, cantidad:1, custom:null, comp:null };
+    if(necesitaSabores(c.items)) modalSaboresCombo(item, c.items, ()=>pushCart(item));
+    else pushCart(item);
   }
+}
+/* ---- Sabores dentro de un combo ---- */
+function necesitaSabores(items){ return (items||[]).some(k=>{ const p = PROD.get(k.producto_id); return p && tieneVars(p) && !k.variante; }); }
+function expandirSabores(items){
+  // un renglón por unidad para los productos con sabores (2 Four Loko → pueden ser de sabores distintos)
+  const out = [];
+  (items||[]).forEach(k=>{ const p = PROD.get(k.producto_id);
+    if(p && tieneVars(p)) for(let n=0; n<k.cantidad; n++) out.push({ ...k, cantidad:1, variante:k.variante||null });
+    else out.push({ ...k }); });
+  return out;
+}
+function juntarSabores(lines){
+  const m = new Map();
+  lines.forEach(k=>{ const key = k.producto_id+'|'+(k.variante||''); if(m.has(key)) m.get(key).cantidad += k.cantidad; else m.set(key, { ...k }); });
+  return [...m.values()];
+}
+function modalSaboresCombo(item, items, onOk){
+  const lines = expandirSabores(items);
+  window._sab = { item, lines, onOk };
+  const filas = lines.map((k,i)=>{ const p = PROD.get(k.producto_id); if(!p || !tieneVars(p)) return '';
+    const vs = [...p.variantes].sort((a,b)=>(Number(b.stock)||0)-(Number(a.stock)||0));
+    const def = k.variante || (vs.find(v=>(Number(v.stock)||0)>0) || vs[0]).nombre;
+    k.variante = def;
+    const tot = lines.filter(x=>x.producto_id===k.producto_id).length, nro = lines.slice(0,i+1).filter(x=>x.producto_id===k.producto_id).length;
+    return `<div class="fld"><label>${esc(p.nombre)}${tot>1?` (${nro} de ${tot})`:''}</label><div class="chips" style="margin:0;flex-wrap:wrap">${p.variantes.map(v=>
+      `<button type="button" class="${v.nombre===def?'on':''}" onclick="elegirSaborCombo(${i}, this)" data-v="${esc(v.nombre)}">${esc(v.nombre)} <span class="muted" style="font-size:11px">(${v.stock||0})</span></button>`).join('')}</div></div>`; }).join('');
+  abrirModal(`<h3>🎁 ${esc(item.nombre)} — ¿qué sabores se lleva?</h3>
+    <p class="muted" style="font-size:12px;margin-bottom:8px">Entre paréntesis, el stock de cada sabor.</p>
+    ${filas}
+    <div class="row"><button class="btn sec grow" onclick="cerrarModal()">Cancelar</button><button class="btn grow" onclick="confirmarSaboresCombo()">Listo</button></div>`);
+}
+function elegirSaborCombo(i, btn){
+  window._sab.lines[i].variante = btn.dataset.v;
+  btn.parentNode.querySelectorAll('button').forEach(b=>b.classList.toggle('on', b===btn));
+}
+function confirmarSaboresCombo(){
+  const { item, lines, onOk } = window._sab;
+  item.comp = juntarSabores(lines);
+  cerrarModal(); onOk(); renderCart();
+}
+function saboresTxt(comp){
+  return (comp||[]).filter(k=>k.variante).map(k=>`${k.cantidad>1?k.cantidad+'× ':''}${esc(k.variante)}`).join(', ');
 }
 function modalSabor(id){
   const p = PROD.get(id);
@@ -688,7 +733,7 @@ function renderCart(){
     total += c.precio*c.cantidad;
     const d=document.createElement('div'); d.className='citem';
     const nom = c.tipo==='combo'
-      ? `🎁 ${esc(c.nombre)}${c.custom?' <span class="tag warn">mod.</span>':''} <button class="tag" onclick="modalPersonalizar(${i})" style="cursor:pointer">✎ Personalizar</button>`
+      ? `🎁 ${esc(c.nombre)}${c.custom?' <span class="tag warn">mod.</span>':''} <button class="tag" onclick="modalPersonalizar(${i})" style="cursor:pointer">✎ Personalizar</button>${c.comp && saboresTxt(c.comp)?`<br><span class="muted" style="font-size:11px;cursor:pointer" onclick="cambiarSaboresCart(${i})">🍹 ${saboresTxt(c.comp)} · cambiar</span>`:''}`
       : `${esc(c.nombre)}${c.variante?` <span class="tag">${esc(c.variante)}</span>`:''}`;
     d.innerHTML=`<span class="grow">${nom}</span>
       <button class="qbtn" onclick="qty(${i},-1)">−</button><b>${c.cantidad}</b>
@@ -699,7 +744,14 @@ function renderCart(){
   document.getElementById('btnCobrar').textContent = 'COBRAR ' + S(total);
   if(METODO==='MIXTO'){ document.getElementById('mixEfe').value=''; document.getElementById('mixYap').value=''; }
 }
-function qty(i,d){ CART[i].cantidad+=d; if(CART[i].cantidad<=0) CART.splice(i,1); renderCart(); }
+function cambiarSaboresCart(i){ const c = CART[i]; modalSaboresCombo(c, c.comp, ()=>{}); }
+function qty(i,d){
+  const c = CART[i];
+  if(d>0 && c.tipo==='combo' && c.comp && necesitaSabores(c.custom || (COMBOS.get(c.id)||{}).items)){   // otro combo: puede llevar otros sabores
+    const nuevo = { ...c, cantidad:1, comp:null };
+    modalSaboresCombo(nuevo, c.custom || COMBOS.get(c.id).items, ()=>CART.splice(i+1, 0, nuevo)); return;
+  }
+  CART[i].cantidad+=d; if(CART[i].cantidad<=0) CART.splice(i,1); renderCart(); }
 function vaciarCarrito(){ CART=[]; renderCart(); }
 function setMetodo(m){ METODO=m;
   document.getElementById('mEfe').classList.toggle('on', m==='EFECTIVO');
@@ -753,7 +805,11 @@ function aplicarCustom(){
   const combo = COMBOS.get(item.id);
   const igual = JSON.stringify(window._custom)===JSON.stringify(combo.items);
   item.custom = igual ? null : window._custom;
-  cerrarModal(); renderCart();
+  item.comp = null;
+  cerrarModal();
+  const base = item.custom || combo.items;
+  if(necesitaSabores(base)) modalSaboresCombo(item, base, ()=>{});
+  renderCart();
 }
 function costoCombo(items){
   return (items||[]).reduce((s,it)=>{ const p=PROD.get(it.producto_id); return s + (p? (p.costo_promedio||0)*it.cantidad : 0); }, 0);
@@ -777,7 +833,7 @@ async function cobrar(){
   try{
     const items = CART.map(c=>{
       if(c.tipo==='combo'){
-        const comp = c.custom || COMBOS.get(c.id).items;
+        const comp = c.comp || c.custom || COMBOS.get(c.id).items;
         return { id:c.id, nombre:c.nombre + (c.custom?' (mod.)':''), tipo:'combo', cantidad:c.cantidad,
           precio_unit:c.precio, costo_unit:costoCombo(comp), componentes:comp };
       }
@@ -793,7 +849,7 @@ async function cobrar(){
     }
     for(const it of items){
       if(it.tipo==='producto') await ajustarStock(it.id, -it.cantidad, it.variante);
-      else for(const comp of it.componentes) await ajustarStock(comp.producto_id, -comp.cantidad*it.cantidad);
+      else for(const comp of it.componentes) await ajustarStock(comp.producto_id, -comp.cantidad*it.cantidad, comp.variante);
     }
     toast(METODO==='FIADO' ? `✅ Fiado registrado: ${S(total)} a ${clienteFiado}` : `✅ Venta registrada: ${S(total)} (${METODO})`);
     document.getElementById('fiadoNombre').value='';
@@ -803,12 +859,20 @@ async function cobrar(){
 }
 async function ajustarStock(prodId, delta, variante){
   const p = PROD.get(prodId); if(!p) return;
-  if(variante && tieneVars(p)){
-    const v = p.variantes.find(x=>x.nombre===variante);
-    if(v) v.stock = (Number(v.stock)||0) + delta;
+  const vSel = variante && tieneVars(p) ? p.variantes.find(x=>x.nombre===variante) : null;
+  if(vSel){
+    vSel.stock = (Number(vSel.stock)||0) + delta;
     p.stock = stockDe(p);
   } else if(tieneVars(p)){
-    p.stock = stockDe(p) + delta; // combo sin variante específica: ajusta total (raro)
+    // combo sin sabor específico: se descuenta del sabor con más stock (el total queda correcto; el detalle se corrige en el próximo conteo)
+    const vs = [...p.variantes].sort((a,b)=>(Number(b.stock)||0)-(Number(a.stock)||0));
+    if(delta >= 0){ vs[0].stock = (Number(vs[0].stock)||0) + delta; }
+    else {
+      let falta = -delta;
+      for(const v of vs){ const t = Math.min(falta, Math.max(0, Number(v.stock)||0)); v.stock = (Number(v.stock)||0) - t; falta -= t; if(falta<=0) break; }
+      if(falta > 0) vs[0].stock = (Number(vs[0].stock)||0) - falta;
+    }
+    p.stock = stockDe(p);
   } else {
     p.stock = (Number(p.stock)||0) + delta;
   }
@@ -845,7 +909,7 @@ async function cargarPanel(){
   const enRango = d => d.fecha <= f2+'T23:59:59';
   // mermas = pérdida de bajas + faltantes netos de los conteos (el ajuste inicial no cuenta)
   const tm = bajasR.filter(b=>enRango(b.data)).reduce((s,b)=>s+(Number(b.data.perdida)||0),0)
-           - conteosR.filter(c=>enRango(c.data) && c.data.categoria!=='Ajuste inicial').reduce((s,c)=>s+(Number(c.data.valor_diferencia)||0),0);
+           - conteosR.filter(c=>enRango(c.data) && c.data.categoria!=='Ajuste inicial' && !c.data.inicial).reduce((s,c)=>s+(Number(c.data.valor_diferencia)||0),0);
   const ventas = ventasR.filter(x=> x.data.fecha <= f2+'T23:59:59' && !x.data.anulada);
   const gastos = gastosR.filter(x=> x.data.fecha <= f2 && x.data.categoria !== 'DEVOLUCION_JUNTA');
   let tv=0, tc=0, efe=0, yap=0, sinCosto=0;
@@ -903,7 +967,7 @@ async function anularVenta(id){
     if(it.tipo==='producto') await ajustarStock(it.id, it.cantidad, it.variante);
     else{
       const comp = it.componentes || (COMBOS.get(it.id) ? COMBOS.get(it.id).items : []);
-      for(const c of comp) await ajustarStock(c.producto_id, c.cantidad*it.cantidad);
+      for(const c of comp) await ajustarStock(c.producto_id, c.cantidad*it.cantidad, c.variante);
     }
   }
   v.anulada = true;
@@ -1222,14 +1286,14 @@ async function guardarConteo(){
 function pintarHistorialConteos(){
   const admin = USER.rol==='admin';
   const mes = hoyISO().slice(0,7);
-  const delMes = CONTEOS.filter(c=>(c.data.fecha||'').startsWith(mes));
+  const delMes = CONTEOS.filter(c=>(c.data.fecha||'').startsWith(mes) && !c.data.inicial);
   const faltMes = delMes.reduce((s,c)=>s+(c.data.items||[]).filter(i=>i.diferencia<0).reduce((a,i)=>a+i.diferencia*i.costo_unit,0),0);
   document.getElementById('ivHist').innerHTML =
     (admin ? `<div class="card"><div class="row" style="justify-content:space-between"><span class="muted">Faltantes de este mes (al costo)</span><b class="sora neg">${S(faltMes)}</b></div></div>` : '') +
     (CONTEOS.map(c=>{
       const d = c.data; const difs = (d.items||[]).filter(i=>i.diferencia!==0);
       return `<div class="card">
-        <div class="row" style="justify-content:space-between"><div><b>${esc(d.categoria)}</b><br>
+        <div class="row" style="justify-content:space-between"><div><b>${esc(d.categoria)}</b>${d.inicial?' <span class="muted" style="font-size:11px">· inventario inicial (no cuenta como faltante del mes)</span>':''}<br>
           <span class="muted" style="font-size:12px">${(d.fecha||'').replace('T',' ').slice(0,16)} · ${esc(d.usuario||'')} · ${(d.items||[]).length} contados</span></div>
           ${admin?`<b class="${(d.valor_diferencia||0)<0?'neg':'pos'}">${S(d.valor_diferencia)}</b>`:''}</div>
         ${d.nota?`<div class="muted" style="font-size:12px;margin-top:6px">${esc(d.nota)}</div>`:''}
@@ -1254,6 +1318,7 @@ async function cargarEnvases(){
       saldo += (m.tipo==='garantia' ? 1 : -1) * (Number(m.monto)||0); });
   }
   document.getElementById('envSaldo').textContent = saldo===null ? '—' : S(saldo);
+  window._ENV_SALDO = saldo; cargarVacios();
   document.getElementById('envDesde').textContent = arq ? 'desde el conteo del '+arq.data.fecha.slice(0,10) : 'cuenta el frasco para empezar';
   document.getElementById('envTable').innerHTML = [...rows].reverse().slice(0,15).map(({id, data:m})=>{
     const signo = m.tipo==='garantia' ? 1 : (m.tipo==='arqueo' ? 0 : -1);
@@ -1262,6 +1327,51 @@ async function cargarEnvases(){
       <td class="right ${signo>0?'pos':signo<0?'neg':''}">${signo===0?'= ':''}${S(m.monto)}</td>
       <td class="right"><button class="btn danger sm" onclick="borrarEnvase('${id}')">✕</button></td></tr>`;
   }).join('') || '<tr><td class="muted">Sin movimientos aún</td></tr>';
+}
+/* ---- Envases vacíos en tienda (foto del último conteo) ---- */
+const VAC_TIPOS = [ {nombre:'Botella cerveza 630 ml', precio:1.5}, {nombre:'Botella vidrio 1 L', precio:2}, {nombre:'Botella vidrio 1.5 L', precio:2}, {nombre:'Pirañita 192 ml', precio:1} ];
+async function cargarVacios(){
+  const rows = await sbAll({ select:'id,data', tipo:'eq.envase_vacio' });
+  rows.sort((a,b)=>(b.data.fecha||'').localeCompare(a.data.fecha||''));
+  window._VAC = rows;
+  const u = rows[0];
+  const frasco = window._ENV_SALDO;
+  const box = document.getElementById('vacBox'); if(!box) return;
+  if(!u){ box.innerHTML = `<div class="row" style="justify-content:space-between"><span class="muted" style="font-size:12px">🫙 Envases vacíos en tienda: sin contar</span>
+      <button class="btn sec sm" onclick="modalVacios()">🫙 Contar vacíos</button></div>`; return; }
+  const d = u.data, bot = (d.items||[]).reduce((t,i)=>t+(Number(i.cantidad)||0),0);
+  box.innerHTML = `<div class="row" style="justify-content:space-between;align-items:flex-start">
+      <div><div class="muted" style="font-size:12px">🫙 ENVASES VACÍOS EN TIENDA</div><b class="sora" style="font-size:18px">${S(d.monto)}</b> <span class="muted" style="font-size:12px">· ${bot} botellas</span>
+        <div class="muted" style="font-size:11px">${(d.items||[]).filter(i=>i.cantidad>0).map(i=>`${i.cantidad} ${esc(i.nombre)} × ${S(i.precio)}`).join(' · ')}</div>
+        <div class="muted" style="font-size:11px">contados el ${fechaCorta(d.fecha)} por ${esc(d.usuario||'')}</div></div>
+      <button class="btn sec sm" onclick="modalVacios()">🫙 Contar vacíos</button></div>
+    ${frasco!=null?`<div class="row" style="justify-content:space-between;margin-top:8px"><span class="muted" style="font-size:12px">Fondo total (frasco + vacíos)</span><b>${S(frasco + (Number(d.monto)||0))}</b></div>`:''}`;
+}
+function modalVacios(){
+  const ult = window._VAC && window._VAC[0] ? window._VAC[0].data.items||[] : [];
+  const tipos = [...VAC_TIPOS, ...ult.filter(i=>!VAC_TIPOS.some(t=>t.nombre===i.nombre))];
+  abrirModal(`<h3>🫙 Contar envases vacíos</h3>
+    <p class="muted" style="font-size:12px;margin-bottom:8px">Cuenta las botellas vacías que hay en la tienda. Esto no mueve caja ni frasco: es una foto de lo que tienes hoy, y reemplaza al conteo anterior.</p>
+    <table style="width:100%"><tr><th>Envase</th><th class="right">Cant.</th><th class="right">S/ c/u</th></tr>
+    ${tipos.map((t,i)=>{ const prev = ult.find(x=>x.nombre===t.nombre);
+      return `<tr><td>${esc(t.nombre)}</td><td class="right"><input class="vacN" data-i="${i}" type="number" min="0" step="1" value="0" style="width:70px" oninput="calcVacios()"></td>
+        <td class="right"><input class="vacP" data-n="${esc(t.nombre)}" type="number" min="0" step="0.1" value="${prev?prev.precio:t.precio}" style="width:70px" oninput="calcVacios()"></td></tr>`; }).join('')}</table>
+    <div class="row" style="justify-content:space-between;margin:10px 0"><span class="muted">Valor total</span><b id="vacTot">S/ 0.00</b></div>
+    <div class="row"><button class="btn sec grow" onclick="cerrarModal()">Cancelar</button><button class="btn grow" onclick="guardarVacios()">Guardar conteo</button></div>`);
+  calcVacios();
+}
+function leerVacios(){
+  const ns = [...document.querySelectorAll('.vacN')], ps = [...document.querySelectorAll('.vacP')];
+  return ps.map((p,i)=>({ nombre:p.dataset.n, cantidad:parseInt(ns[i].value)||0, precio:Number(p.value)||0 }));
+}
+function calcVacios(){ const it = leerVacios(); document.getElementById('vacTot').textContent = S(it.reduce((t,i)=>t+i.cantidad*i.precio,0)); }
+async function guardarVacios(){
+  const items = leerVacios();
+  const monto = Math.round(items.reduce((t,i)=>t+i.cantidad*i.precio,0)*100)/100;
+  try{
+    await sb('POST', {}, { tipo:'envase_vacio', data:{ items, monto, fecha:ahoraISO(), usuario:USER.nombre } });
+    cerrarModal(); toast('✅ Conteo de envases vacíos guardado: '+S(monto)); cargarVacios();
+  }catch(e){ toast('❌ Error: '+e.message); }
 }
 let ENV_ROWS = [];
 async function cargarEnvRows(){ ENV_ROWS = await sbAll({ select:'id,data', tipo:'eq.envase' }); return ENV_ROWS; }
@@ -1627,7 +1737,7 @@ function csvVentas(){
 function consumoItems(items){
   const c = {};
   (items||[]).forEach(it=>{
-    if(it.tipo==='combo') (it.componentes || (COMBOS.get(it.id)||{}).items || []).forEach(k=>{ const key = k.producto_id+'|'; c[key] = (c[key]||0) + k.cantidad*it.cantidad; });
+    if(it.tipo==='combo') (it.componentes || (COMBOS.get(it.id)||{}).items || []).forEach(k=>{ const key = k.producto_id+'|'+(k.variante||''); c[key] = (c[key]||0) + k.cantidad*it.cantidad; });
     else { const key = it.id+'|'+(it.variante||''); c[key] = (c[key]||0) + Number(it.cantidad||0); }
   });
   return c;
@@ -2103,7 +2213,7 @@ const UXC_DEF = {
   'PILSEN LATA 473 ML':6, 'CUSQUEÑA TRIGO LATA 473 ML':6, 'CUSQUEÑA NEGRA LATA 473ML':6, 'CRISTAL LATA':6, 'MIKES':6, 'FIESTA 2L':6,
   'COCA COLA 3L':4, 'INKA COLA 3L':4, 'PEPSI 3L':4, 'GUARANA 3L':4, 'GUARANA 2L':6, 'PEPSI 2L':6, 'PEPSI 1L':6,
   'COCA COLA PERSONAL':12, 'INKA COLA PERSONAL':12, 'COCA COLA 1.5 DESCARTABLE':6, 'INKA COLA 1.5L DESCARTABLE':6,
-  'COCA COLA VIDRIO 1L':12, 'AGUA CIELO 2.5 L':6, 'AGUA CIELO 0.6 L':15, 'KR 450 ML':12, 'KR 1.7 LT':6, 'KR 3L':4,
+  'COCA COLA VIDRIO 1L':12, 'AGUA CIELO 2.5 L':6, 'AGUA CIELO 0.6 L':15, 'KR 400 ML':12, 'KR 1.7 LT':6, 'KR 3L':4,
   'SPORADE 500ML':12, 'SPORADE 1.5 L':6, 'EVEREST 1.5 L':6, 'GUARANITA':12,
   'PAPA JALAPEÑO':6, 'CHISTRIS':12, 'PIQUEO':12, 'RITS GRANDE':6, 'MARGARITA GRANDE':6, 'MARGARITA CHICO':6, 'OREO CHICO':6,
   'CASINO CHICO':6, 'NICK CHICO':6, 'NICK GRANDE':6, 'CHUPETIN':24, 'FOUR LOKO':24, 'CAJA CIGARROS GOLDEN':10,
