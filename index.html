@@ -43,6 +43,9 @@ input:focus,select:focus{border-color:var(--amber-deep)}
 #pinPad button{height:76px;border-radius:50%;background:var(--panel);font-size:24px;font-weight:600}
 #pinPad button:active{background:var(--panel2)}
 #loginMsg{color:var(--neg);height:20px;font-size:14px}
+#huellaBox{display:flex;flex-direction:column;gap:8px;align-items:center}
+#huellaBox button{background:var(--panel);border:1px solid var(--amber);color:var(--amber);border-radius:14px;padding:12px 20px;font-size:15px;font-weight:700}
+#verTxt{position:absolute;bottom:12px;font-size:11px;color:var(--muted,#8A9388)}
 #app{display:none;padding-bottom:76px}
 header{display:flex;align-items:center;justify-content:space-between;padding:14px 16px;border-bottom:1px solid var(--line)}
 header .brand{font-family:'Sora';font-weight:800;font-size:17px}
@@ -140,12 +143,14 @@ canvas{width:100%;background:var(--panel);border:1px solid var(--line);border-ra
   <div id="pinDots"><div class="dot"></div><div class="dot"></div><div class="dot"></div><div class="dot"></div></div>
   <div id="pinPad"></div>
   <div id="loginMsg"></div>
+  <div id="huellaBox"></div>
+  <div id="verTxt">versión 20 · huella</div>
 </div>
 
 <div id="app">
 <header>
   <div class="brand sora">LICORERÍA<span>.</span></div>
-  <div class="who">Hola, <b id="whoName"></b> · <button onclick="logout()" style="color:var(--amber);font-size:13px">Salir</button></div>
+  <div class="who">Hola, <b id="whoName"></b> <button id="btnHuellaHdr" class="hide" onclick="modalHuella()" title="Entrar con huella" style="font-size:14px">🔒</button> · <button onclick="logout()" style="color:var(--amber);font-size:13px">Salir</button></div>
 </header>
 
 <main>
@@ -455,6 +460,10 @@ canvas{width:100%;background:var(--panel);border:1px solid var(--line);border-ra
     <button class="btn sec sm" style="margin-top:10px" onclick="modalUsuario()">+ Agregar usuario</button>
   </div>
   <div class="card">
+    <h2 style="font-size:16px">🔒 Entrar con huella</h2>
+    <div class="huellaAjustes"></div>
+  </div>
+  <div class="card">
     <h2 style="font-size:16px">💾 Respaldo</h2>
     <p class="muted" style="font-size:13px;margin-bottom:10px">Descarga una copia completa de todos los datos.</p>
     <button class="btn sec sm" onclick="backup()">Descargar respaldo JSON</button>
@@ -542,10 +551,126 @@ async function tryLogin(){
     if(!u){ document.getElementById('loginMsg').textContent = 'PIN incorrecto'; PIN=''; drawDots(); return; }
     USER = { id:u.id, ...u.data };
     document.getElementById('loginMsg').textContent = '';
-    iniciarApp();
+    try{ localStorage.removeItem('lic_huella_pausa_'+u.id); }catch(e){}
+    await iniciarApp();
+    ofrecerHuella();
   }catch(e){ document.getElementById('loginMsg').textContent = 'Error de conexión. Revisa la configuración.'; console.error(e); }
 }
-function logout(){ location.reload(); }
+function logout(){
+  // "Salir" obliga a usar el PIN la próxima vez (la huella sigue activada, solo queda en pausa hasta entrar con PIN)
+  try{ if(USER) localStorage.setItem('lic_huella_pausa_'+USER.id, '1'); }catch(e){}
+  location.reload();
+}
+
+/* ============ HUELLA (WebAuthn, desbloqueo local) ============
+   La app no usa Supabase Auth: el PIN se compara dentro de la app con los usuarios guardados.
+   La huella reemplaza solo ese paso: si el lector del dispositivo la aprueba, se vuelve a leer el
+   usuario desde Supabase (nombre, rol y PIN actuales) y se entra exactamente como con su PIN.
+   Si su PIN cambió o el usuario ya no existe, la huella deja de valer y se pide el PIN. */
+const HK = id => 'lic_huella_'+id;
+const lsGet = k => { try{ return localStorage.getItem(k); }catch(e){ return null; } };
+const lsSet = (k,v) => { try{ localStorage.setItem(k,v); }catch(e){} };
+const lsDel = k => { try{ localStorage.removeItem(k); }catch(e){} };
+const b64u = buf => btoa(String.fromCharCode(...new Uint8Array(buf))).replace(/\+/g,'-').replace(/\//g,'_').replace(/=+$/,'');
+const unb64u = s => Uint8Array.from(atob(s.replace(/-/g,'+').replace(/_/g,'/') + '==='.slice((s.length+3)%4)), c=>c.charCodeAt(0));
+async function pinHash(id, pin){ const d = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(id+':'+pin)); return b64u(d); }
+let HUELLA_OK = null;
+const soloPin = () => !!lsGet('lic_solo_pin');   // este dispositivo entra solo con PIN, para todos
+function setSoloPin(on){ on ? lsSet('lic_solo_pin','1') : lsDel('lic_solo_pin'); toast(on ? '🔢 Este dispositivo entrará solo con PIN' : '👆 Huella permitida en este dispositivo'); pintarHuellaUI(); }
+async function huellaDisponible(){
+  if(HUELLA_OK !== null) return HUELLA_OK;
+  try{ HUELLA_OK = !!(window.isSecureContext && window.PublicKeyCredential &&
+    await PublicKeyCredential.isUserVerifyingPlatformAuthenticatorAvailable()); }catch(e){ HUELLA_OK = false; }
+  return HUELLA_OK;
+}
+function huellaDe(id){ try{ return JSON.parse(lsGet(HK(id))||'null'); }catch(e){ return null; } }
+function huellasDelEquipo(){
+  const out = [];
+  try{ for(let i=0;i<localStorage.length;i++){ const k = localStorage.key(i);
+    if(/^lic_huella_[0-9a-f-]{36}$/.test(k)){ const h = huellaDe(k.slice(11)); if(h) out.push({ id:k.slice(11), ...h }); } } }catch(e){}
+  return out.sort((a,b)=>a.nombre.localeCompare(b.nombre));
+}
+async function activarHuella(){
+  if(!USER || soloPin()) return;
+  try{
+    const cred = await navigator.credentials.create({ publicKey:{
+      challenge: crypto.getRandomValues(new Uint8Array(32)),
+      rp: { name:'Licorería El Pino' },
+      user: { id: new TextEncoder().encode(USER.id), name: USER.nombre, displayName: USER.nombre },
+      pubKeyCredParams: [{ type:'public-key', alg:-7 }, { type:'public-key', alg:-257 }],
+      authenticatorSelection: { authenticatorAttachment:'platform', userVerification:'required', residentKey:'discouraged' },
+      attestation: 'none', timeout: 60000 } });
+    lsSet(HK(USER.id), JSON.stringify({ cred: b64u(cred.rawId), nombre: USER.nombre, pinh: await pinHash(USER.id, USER.pin) }));
+    lsDel('lic_huella_no_'+USER.id); lsSet('lic_huella_ultimo', USER.id);
+    toast('✅ Huella activada en este dispositivo para '+USER.nombre);
+  }catch(e){ toast(e.name==='NotAllowedError' ? 'Se canceló la activación' : '❌ No se pudo activar: '+e.message); }
+  pintarHuellaUI();
+}
+function quitarHuella(){
+  if(!USER) return;
+  lsDel(HK(USER.id)); lsDel('lic_huella_pausa_'+USER.id);
+  toast('Huella quitada de este dispositivo'); pintarHuellaUI();
+}
+async function entrarConHuella(id){
+  const h = huellaDe(id); if(!h) return;
+  const msg = document.getElementById('loginMsg');
+  try{
+    await navigator.credentials.get({ publicKey:{
+      challenge: crypto.getRandomValues(new Uint8Array(32)),
+      allowCredentials: [{ type:'public-key', id: unb64u(h.cred), transports:['internal'] }],
+      userVerification: 'required', timeout: 60000 } });
+  }catch(e){ msg.textContent = e.name==='NotAllowedError' ? '' : 'No se pudo leer la huella. Usa tu PIN.'; return; }
+  msg.textContent = 'Verificando...';
+  try{
+    const [u] = await sb('GET', { select:'id,data', tipo:'eq.usuario', id:'eq.'+id });
+    if(!u || !u.data || !u.data.pin){ lsDel(HK(id)); msg.textContent = 'Este usuario ya no existe. Entra con PIN.'; pintarHuellaLogin(); return; }
+    if(await pinHash(u.id, u.data.pin) !== h.pinh){ lsDel(HK(id)); msg.textContent = 'El PIN de '+u.data.nombre+' cambió. Entra con el PIN nuevo.'; pintarHuellaLogin(); return; }
+    USER = { id:u.id, ...u.data };   // mismos datos y permisos que al entrar con su PIN
+    lsSet('lic_huella_ultimo', id); msg.textContent = '';
+    iniciarApp();
+  }catch(e){ msg.textContent = 'Error de conexión. Revisa el internet.'; console.error(e); }
+}
+async function pintarHuellaLogin(auto){
+  const box = document.getElementById('huellaBox'); box.innerHTML = '';
+  if(!await huellaDisponible() || soloPin()) return;
+  const hs = huellasDelEquipo().filter(h=>!lsGet('lic_huella_pausa_'+h.id));
+  box.innerHTML = hs.map(h=>`<button onclick="entrarConHuella('${h.id}')">👆 Entrar con huella${hs.length>1?' · '+esc(h.nombre):''}</button>`).join('');
+  if(auto && hs.length){
+    const ult = lsGet('lic_huella_ultimo');
+    const h = hs.find(x=>x.id===ult) || (hs.length===1 ? hs[0] : null);
+    if(h) entrarConHuella(h.id);   // en iPhone puede no salir sola: queda el botón
+  }
+}
+async function pintarHuellaUI(){
+  const ok = await huellaDisponible();
+  const hdr = document.getElementById('btnHuellaHdr'); if(hdr) hdr.classList.toggle('hide', !ok || !USER);
+  const h = USER && huellaDe(USER.id);
+  document.querySelectorAll('.huellaAjustes').forEach(aj=>{
+  if(!ok){ aj.innerHTML = '<p class="muted" style="font-size:13px">Este dispositivo no tiene lector de huella disponible para la app (o no está abierta por https).</p>'; return; }
+  if(soloPin()){ aj.innerHTML = `<p style="font-size:13px;margin-bottom:8px">🔢 <b>Este dispositivo entra solo con PIN</b>, para todos los usuarios. No se pide ni se ofrece la huella.</p>
+    <button class="btn sec sm" onclick="setSoloPin(false)">Permitir huella en este dispositivo</button>`; return; }
+  aj.innerHTML = h
+    ? `<p style="font-size:13px;margin-bottom:8px">✅ <b>Activada en este dispositivo</b> para ${esc(USER.nombre)}.</p><button class="btn sec sm" onclick="quitarHuella()">Quitar huella</button>`
+    : `<p class="muted" style="font-size:13px;margin-bottom:8px">Entra sin escribir el PIN, con la huella de este dispositivo. Se activa por usuario y por dispositivo.</p><button class="btn sm" onclick="activarHuella()">👆 Activar huella</button>`;
+  aj.innerHTML += `<p class="muted" style="font-size:11px;margin-top:8px">⚠ El celular o tablet acepta <b>cualquier</b> huella registrada en él. Actívala solo en equipos donde nadie más tenga su huella, sobre todo si eres admin.</p>
+    <button class="btn sec sm" style="margin-top:8px" onclick="setSoloPin(true)">🔢 Este dispositivo: solo PIN para todos</button>`;
+  });
+}
+function modalHuella(){
+  abrirModal(`<h3>🔒 Entrar con huella</h3><div class="huellaAjustes"></div>
+    <button class="btn sec" style="width:100%;margin-top:12px" onclick="cerrarModal();pintarHuellaUI()">Cerrar</button>`);
+  pintarHuellaUI();
+}
+async function ofrecerHuella(){
+  if(!USER || !await huellaDisponible() || soloPin() || huellaDe(USER.id) || lsGet('lic_huella_no_'+USER.id)) return;
+  abrirModal(`<h3>👆 ¿Entrar con huella?</h3>
+    <p class="muted" style="font-size:13px;margin-bottom:12px">La próxima vez podrás entrar con la huella de este dispositivo en lugar de escribir tu PIN. Tendrás los mismos permisos que con tu PIN.</p>
+    <p class="muted" style="font-size:11px;margin-bottom:12px">⚠ El dispositivo acepta cualquier huella registrada en él: actívala solo si nadie más tiene su huella aquí.</p>
+    <div class="row"><button class="btn sec grow" onclick="lsSet('lic_huella_no_'+USER.id,'1');cerrarModal()">Ahora no</button>
+    <button class="btn grow" onclick="cerrarModal();activarHuella()">Activar huella</button></div>
+    <button class="btn sec" style="width:100%;margin-top:8px" onclick="cerrarModal();setSoloPin(true)">🔢 Este dispositivo es compartido: solo PIN para todos</button>`);
+}
+pintarHuellaLogin(true);
 
 /* ============ ARRANQUE ============ */
 const TABS = [
@@ -575,6 +700,7 @@ async function iniciarApp(){
     nav.appendChild(b);
   });
   if(USER.rol==='vendedor') document.getElementById('btnNuevoProd').classList.add('hide');
+  pintarHuellaUI();
   Object.keys(PRIV).forEach(k=>PRIV[k] = false); aplicarPriv();
   document.getElementById('cierreFecha').value = hoyISO();
   await cargarCatalogo();
