@@ -144,7 +144,7 @@ canvas{width:100%;background:var(--panel);border:1px solid var(--line);border-ra
   <div id="pinPad"></div>
   <div id="loginMsg"></div>
   <div id="huellaBox"></div>
-  <div id="verTxt">versión 20 · huella</div>
+  <div id="verTxt">versión 21 · yape con hora</div>
 </div>
 
 <div id="app">
@@ -298,13 +298,17 @@ canvas{width:100%;background:var(--panel);border:1px solid var(--line);border-ra
   </div>
   <div id="cyRango" class="hide">
     <div class="card">
-      <p class="muted" style="font-size:13px;margin-bottom:10px">Suma todos los Yapes que registró la app entre dos fechas, día por día, para cuadrar con el historial de tu aplicativo Yape.</p>
+      <p class="muted" style="font-size:13px;margin-bottom:10px">Suma todos los Yapes que registró la app entre dos fechas y horas, día por día, para cuadrar con el historial de tu aplicativo Yape.</p>
       <div class="chips" style="margin-bottom:8px">
-        <button onclick="cyRapido('7d')">7 días</button><button onclick="cyRapido('mes')">Este mes</button><button onclick="cyRapido('mespas')">Mes pasado</button>
+        <button onclick="cyRapido('7d')">7 días</button><button onclick="cyRapido('mes')">Este mes</button><button onclick="cyRapido('mespas')">Mes pasado</button><button onclick="cyHastaAhora()">⏱ Hasta ahora</button>
       </div>
       <div class="row" style="gap:8px">
         <div class="grow"><label class="muted" style="font-size:12px">Desde</label><input type="date" id="cyDesde"></div>
         <div class="grow"><label class="muted" style="font-size:12px">Hasta</label><input type="date" id="cyHasta"></div>
+      </div>
+      <div class="row" style="gap:8px;margin-top:6px">
+        <div class="grow"><label class="muted" style="font-size:12px">Desde la hora</label><input type="time" id="cyHoraDesde" value="00:00"></div>
+        <div class="grow"><label class="muted" style="font-size:12px">Hasta la hora</label><input type="time" id="cyHoraHasta" value="23:59"></div>
       </div>
       <div class="row" style="margin-top:10px;gap:8px">
         <button class="btn grow" onclick="cargarYapeRango()">Calcular</button>
@@ -1204,22 +1208,22 @@ async function borrarMov(id){
   await sb('DELETE', { id:'eq.'+id }); cargarCaja();
 }
 /* Cierre Yape */
-async function yapesEntre(f1, f2){
-  const fin = f2+'T23:59:59';
+async function yapesEntre(f1, f2, h1, h2){
+  const ini = f1+'T'+(h1||'00:00')+':00', fin = f2+'T'+(h2||'23:59')+':59';
   const [ventasR, fiadosR, cierresR] = await Promise.all([
-    sbAll({ select:'data', tipo:'eq.venta', 'data->>fecha':'gte.'+f1+'T00:00:00' }),
+    sbAll({ select:'data', tipo:'eq.venta', 'data->>fecha':'gte.'+ini }),
     sbAll({ select:'data', tipo:'eq.fiado' }),
     sbAll({ select:'id,data', tipo:'eq.cierre_yape', 'data->>fecha':'gte.'+f1 })
   ]);
   const yapes = [];
   ventasR.forEach(({data:v})=>{
-    if(v.anulada || v.fecha > fin) return;
+    if(v.anulada || v.fecha < ini || v.fecha > fin) return;
     const y = pagoDe(v).yape;
     if(y>0) yapes.push({ fecha:v.fecha, monto:y, det:(v.items||[]).map(i=>`${i.cantidad}× ${i.nombre}`).join(', '), origen:'Venta', usuario:v.usuario||'' });
   });
   const pf = {};   // un pago de fiado puede repartirse entre varias deudas: se junta por fecha y cliente
   fiadosR.forEach(({data:f})=>(f.pagos||[]).forEach(p=>{
-    if(!(Number(p.yape)>0) || p.fecha < f1+'T00:00:00' || p.fecha > fin) return;
+    if(!(Number(p.yape)>0) || p.fecha < ini || p.fecha > fin) return;
     const k = p.fecha+'|'+f.cliente;
     pf[k] = pf[k] || { fecha:p.fecha, monto:0, det:'Pago de fiado · '+f.cliente, origen:'Fiado', usuario:p.usuario||'' };
     pf[k].monto += Number(p.yape);
@@ -1255,14 +1259,19 @@ function subCierre(v){
     cargarYapeRango();
   } else cargarCierreYape();
 }
-function cyRapido(c){ const [a,b] = rangoRapido(c); document.getElementById('cyDesde').value=a; document.getElementById('cyHasta').value=b; cargarYapeRango(); }
+function cyRapido(c){ const [a,b] = rangoRapido(c); document.getElementById('cyDesde').value=a; document.getElementById('cyHasta').value=b;
+  document.getElementById('cyHoraDesde').value='00:00'; document.getElementById('cyHoraHasta').value='23:59'; cargarYapeRango(); }
+function cyHastaAhora(){ // "hasta ahora": hoy, a la hora actual (la fecha y hora de inicio se ponen a mano)
+  document.getElementById('cyHasta').value = hoyISO(); document.getElementById('cyHoraHasta').value = ahoraISO().slice(11,16); cargarYapeRango(); }
 let CY_CACHE = [];
 async function cargarYapeRango(){
   const f1 = document.getElementById('cyDesde').value, f2 = document.getElementById('cyHasta').value;
-  if(!f1 || !f2 || f2 < f1) return toast('Revisa las fechas');
+  const h1 = document.getElementById('cyHoraDesde').value || '00:00', h2 = document.getElementById('cyHoraHasta').value || '23:59';
+  if(!f1 || !f2 || (f2+h2) < (f1+h1)){ document.getElementById('cyRes').innerHTML=''; CY_CACHE=[]; toast('Revisa las fechas y horas: el inicio es después del final'); return; }
   document.getElementById('cyRes').innerHTML = '<div class="card muted">Calculando…</div>';
-  const { yapes, cierres } = await yapesEntre(f1, f2);
+  const { yapes, cierres } = await yapesEntre(f1, f2, h1, h2);
   CY_CACHE = yapes;
+  const conHora = h1!=='00:00' || h2!=='23:59';
   const porDia = {};
   yapes.forEach(y=>{ const d = y.fecha.slice(0,10); (porDia[d] = porDia[d] || []).push(y); });
   const cierreDe = {}; cierres.forEach(c=>{ cierreDe[c.data.fecha] = c.data; });
@@ -1273,9 +1282,10 @@ async function cargarYapeRango(){
   const conDif = dias.filter(d=>cierreDe[d] && !cierreDe[d].conforme).length;
   document.getElementById('cyRes').innerHTML = `
     <div class="card">
-      <div class="row" style="justify-content:space-between"><span class="muted">${yapes.length} yapes · ${fechaCorta(f1)} al ${fechaCorta(f2)}</span><b class="sora" style="font-size:22px;color:var(--yape)">${S(total)}</b></div>
+      <div class="row" style="justify-content:space-between"><span class="muted">${yapes.length} yapes · ${fechaCorta(f1)}${conHora?' '+h1:''} al ${fechaCorta(f2)}${conHora?' '+h2:''}</span><b class="sora" style="font-size:22px;color:var(--yape)">${S(total)}</b></div>
       <div class="row" style="justify-content:space-between;font-size:13px;margin-top:6px"><span>De ventas</span><b>${S(total-deFiados)}</b></div>
       <div class="row" style="justify-content:space-between;font-size:13px"><span>De pagos de fiados</span><b>${S(deFiados)}</b></div>
+      ${conHora && yapes.length?`<div class="muted" style="font-size:12px;margin-top:6px">Primer yape ${f1!==f2?fechaCorta(yapes[0].fecha.slice(0,10))+' ':''}${yapes[0].fecha.slice(11,16)} · último ${f1!==f2?fechaCorta(yapes[yapes.length-1].fecha.slice(0,10))+' ':''}${yapes[yapes.length-1].fecha.slice(11,16)}</div>`:''}
       ${sinCierre?`<div class="neg" style="font-size:13px;margin-top:8px">⚠ ${sinCierre} día(s) con yapes sin cierre registrado</div>`:''}
       ${conDif?`<div class="neg" style="font-size:13px;margin-top:4px">⚠ ${conDif} día(s) cerrados con diferencia</div>`:''}
     </div>
@@ -1291,7 +1301,7 @@ async function cargarYapeRango(){
 }
 function csvYape(){
   if(!CY_CACHE.length) return toast('Primero calcula un rango con yapes');
-  descargarCSV(`yapes_${document.getElementById('cyDesde').value}_a_${document.getElementById('cyHasta').value}.csv`,
+  descargarCSV(`yapes_${document.getElementById('cyDesde').value}_${document.getElementById('cyHoraDesde').value.replace(':','h')}_a_${document.getElementById('cyHasta').value}_${document.getElementById('cyHoraHasta').value.replace(':','h')}.csv`,
     [['Fecha','Hora','Origen','Detalle','Monto','Usuario'], ...CY_CACHE.map(y=>[y.fecha.slice(0,10), y.fecha.slice(11,16), y.origen, y.det, y.monto.toFixed(2), y.usuario])]);
 }
 async function cerrarYape(f, total, conforme, obs){
