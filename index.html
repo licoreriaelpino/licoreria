@@ -144,7 +144,7 @@ canvas{width:100%;background:var(--panel);border:1px solid var(--line);border-ra
   <div id="pinPad"></div>
   <div id="loginMsg"></div>
   <div id="huellaBox"></div>
-  <div id="verTxt">versión 21 · yape con hora</div>
+  <div id="verTxt">versión 22 · yape a caja</div>
 </div>
 
 <div id="app">
@@ -299,8 +299,8 @@ canvas{width:100%;background:var(--panel);border:1px solid var(--line);border-ra
   <div id="cyRango" class="hide">
     <div class="card">
       <p class="muted" style="font-size:13px;margin-bottom:10px">Suma todos los Yapes que registró la app entre dos fechas y horas, día por día, para cuadrar con el historial de tu aplicativo Yape.</p>
-      <div class="chips" style="margin-bottom:8px">
-        <button onclick="cyRapido('7d')">7 días</button><button onclick="cyRapido('mes')">Este mes</button><button onclick="cyRapido('mespas')">Mes pasado</button><button onclick="cyHastaAhora()">⏱ Hasta ahora</button>
+      <div class="chips" style="margin-bottom:8px;flex-wrap:wrap">
+        <button onclick="cyRapido('7d')">7 días</button><button onclick="cyRapido('mes')">Este mes</button><button onclick="cyRapido('mespas')">Mes pasado</button><button onclick="cyDesdeUltimo()">↪ Desde el último traspaso</button><button onclick="cyHastaAhora()">⏱ Hasta ahora</button>
       </div>
       <div class="row" style="gap:8px">
         <div class="grow"><label class="muted" style="font-size:12px">Desde</label><input type="date" id="cyDesde"></div>
@@ -316,6 +316,7 @@ canvas{width:100%;background:var(--panel);border:1px solid var(--line);border-ra
       </div>
     </div>
     <div id="cyRes"></div>
+    <div id="cyTras"></div>
   </div>
   <div class="card" id="cyDia">
     <h2 style="font-size:16px">📱 Cierre Yape del día</h2>
@@ -1153,7 +1154,9 @@ async function cargarCaja(){
     ventasR.forEach(({data:v})=>{ if(!v.anulada && v.fecha > desde) s += pagoDe(v)[metodo==='EFECTIVO'?'efectivo':'yape']; });
     comprasR.forEach(({data:c})=>{ if((c.fuente||'EXTERNO')===metodo && (c.fecha+'T23:59:59') > desde) s -= c.costo_total; });
     gastosR.forEach(({data:g})=>{ if((g.fuente||'EXTERNO')===metodo && (g.fecha+'T23:59:59') > desde && g.categoria!=='DEVOLUCION_JUNTA') s -= g.monto; });
-    movs.forEach(({data:m})=>{ if(m.tipo!=='arqueo' && m.metodo===metodo && m.fecha > desde)
+    movs.forEach(({data:m})=>{
+      if(m.tipo==='traspaso'){ if(m.fecha > desde) s += (metodo==='EFECTIVO' ? 1 : -1) * Number(m.monto); return; }   // Yape → caja: el total no cambia
+      if(m.tipo!=='arqueo' && m.metodo===metodo && m.fecha > desde)
       s += (m.tipo==='aporte'? Number(m.monto) : -Number(m.monto)); });
     fiadosR.forEach(({data:f})=>(f.pagos||[]).forEach(p=>{ if(p.fecha > desde) s += (metodo==='EFECTIVO'?(p.efectivo||0):(p.yape||0)); }));
     bajasR.forEach(({data:b})=>{ if(b.reembolso && b.fuente===metodo && b.fecha > desde) s += Number(b.reembolso)||0; });
@@ -1166,7 +1169,9 @@ async function cargarCaja(){
   document.getElementById('cajaYapeDesde').textContent = arqYap ? 'desde arqueo del '+arqYap.data.fecha.slice(0,10) : 'sin arqueo inicial';
   // Movimientos recientes (manuales + compras/gastos con fuente)
   const lineas = [];
-  movs.forEach(m=>lineas.push({f:m.data.fecha, txt:`${m.data.tipo.toUpperCase()} ${m.data.metodo} — ${esc(m.data.concepto||'')}`, monto:(m.data.tipo==='retiro'?-1:1)*Number(m.data.monto), id:m.id, borrable:true}));
+  movs.forEach(m=>lineas.push(m.data.tipo==='traspaso'
+    ? {f:m.data.fecha, txt:`⇄ TRASPASO Yape → Efectivo — ${esc(m.data.usuario||'')} · cubre ${fechaHora(m.data.desde)} a ${fechaHora(m.data.hasta)}`, monto:Number(m.data.monto), id:m.id, borrable:true}
+    : {f:m.data.fecha, txt:`${m.data.tipo.toUpperCase()} ${m.data.metodo} — ${esc(m.data.concepto||'')}`, monto:(m.data.tipo==='retiro'?-1:1)*Number(m.data.monto), id:m.id, borrable:true}));
   comprasR.forEach(({data:c})=>{ if(c.fuente && c.fuente!=='EXTERNO') lineas.push({f:c.fecha+'T12:00:00', txt:`Compra ${esc(c.nombre)} (${c.fuente})`, monto:-c.costo_total}); });
   gastosR.forEach(({data:g})=>{ if(g.fuente && g.fuente!=='EXTERNO') lineas.push({f:g.fecha+'T12:00:00', txt:`Gasto ${esc(g.concepto)} (${g.fuente})`, monto:-g.monto}); });
   fiadosR.forEach(({data:f})=>(f.pagos||[]).forEach(p=>lineas.push({f:p.fecha, txt:`Pago fiado de ${esc(f.cliente)}`, monto:(p.efectivo||0)+(p.yape||0)})));
@@ -1208,8 +1213,8 @@ async function borrarMov(id){
   await sb('DELETE', { id:'eq.'+id }); cargarCaja();
 }
 /* Cierre Yape */
-async function yapesEntre(f1, f2, h1, h2){
-  const ini = f1+'T'+(h1||'00:00')+':00', fin = f2+'T'+(h2||'23:59')+':59';
+async function yapesEntre(f1, f2, h1, h2, finExacto){
+  const ini = f1+'T'+(h1||'00:00')+':00', fin = finExacto || (f2+'T'+(h2||'23:59')+':59');
   const [ventasR, fiadosR, cierresR] = await Promise.all([
     sbAll({ select:'data', tipo:'eq.venta', 'data->>fecha':'gte.'+ini }),
     sbAll({ select:'data', tipo:'eq.fiado' }),
@@ -1255,8 +1260,13 @@ function subCierre(v){
   document.getElementById('cyDia').classList.toggle('hide', v!=='dia');
   document.getElementById('cyRango').classList.toggle('hide', v!=='rango');
   if(v==='rango'){
-    if(!document.getElementById('cyDesde').value){ const [a,b] = rangoRapido('mes'); document.getElementById('cyDesde').value=a; document.getElementById('cyHasta').value=b; }
-    cargarYapeRango();
+    (async()=>{
+      if(!document.getElementById('cyDesde').value){
+        if(await cyDesdeUltimo(true)){ cyHastaAhora(); return; }
+        const [a,b] = rangoRapido('mes'); document.getElementById('cyDesde').value=a; document.getElementById('cyHasta').value=b;
+      }
+      cargarYapeRango();
+    })();
   } else cargarCierreYape();
 }
 function cyRapido(c){ const [a,b] = rangoRapido(c); document.getElementById('cyDesde').value=a; document.getElementById('cyHasta').value=b;
@@ -1264,14 +1274,81 @@ function cyRapido(c){ const [a,b] = rangoRapido(c); document.getElementById('cyD
 function cyHastaAhora(){ // "hasta ahora": hoy, a la hora actual (la fecha y hora de inicio se ponen a mano)
   document.getElementById('cyHasta').value = hoyISO(); document.getElementById('cyHoraHasta').value = ahoraISO().slice(11,16); cargarYapeRango(); }
 let CY_CACHE = [];
+/* ---- Traspaso Yape → caja (desde Cierre Yape) ---- */
+let CY_RANGO = null;   // {ini, fin, total} del último cálculo
+let TRAS = [];
+const fechaHora = iso => iso ? fechaCorta(iso.slice(0,10))+' '+iso.slice(11,16) : '';
+function isoLocal(d){ return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0')+'T'+String(d.getHours()).padStart(2,'0')+':'+String(d.getMinutes()).padStart(2,'0')+':'+String(d.getSeconds()).padStart(2,'0'); }
+async function cargarTraspasos(){
+  const rows = await sbAll({ select:'id,data', tipo:'eq.mov_caja', 'data->>tipo':'eq.traspaso' });
+  TRAS = rows.sort((a,b)=>(b.data.hasta||'').localeCompare(a.data.hasta||''));
+  pintarTraspasos();
+  return TRAS;
+}
+function pintarTraspasos(){
+  const box = document.getElementById('cyTras'); if(!box) return;
+  if(!TRAS.length){ box.innerHTML = ''; return; }
+  box.innerHTML = `<div class="card"><h2 style="font-size:15px;margin-bottom:6px">⇄ Yapes pasados a caja</h2>
+    ${TRAS.slice(0,8).map((t,i)=>`<div class="citem" style="font-size:12px"><span class="grow"><b>${S(t.data.monto)}</b> · ${esc(t.data.usuario||'')} · ${fechaHora(t.data.fecha)}<br>
+      <span class="muted">cubre ${fechaHora(t.data.desde)} → ${fechaHora(t.data.hasta)}</span></span>
+      ${i===0?`<button class="btn sec sm" onclick="borrarTraspaso('${t.id}')" title="Deshacer el último">✕</button>`:''}</div>`).join('')}
+    <p class="muted" style="font-size:11px;margin-top:6px">Solo se puede deshacer el último traspaso.</p></div>`;
+}
+function siguienteDesde(hasta){ // un segundo después de lo que cubrió el último traspaso
+  const d = new Date(hasta); d.setSeconds(d.getSeconds()+1); return isoLocal(d);
+}
+async function cyDesdeUltimo(silencioso){
+  if(!TRAS.length) await cargarTraspasos();
+  if(!TRAS.length){ if(!silencioso) toast('Todavía no hay traspasos: elige la fecha de inicio a mano'); return false; }
+  const ini = siguienteDesde(TRAS[0].data.hasta);
+  document.getElementById('cyDesde').value = ini.slice(0,10);
+  document.getElementById('cyHoraDesde').value = ini.slice(11,16);
+  if(!silencioso) cargarYapeRango();
+  return true;
+}
+function modalTraspaso(){
+  if(!CY_RANGO || !(CY_RANGO.total>0)) return toast('No hay yapes en este rango');
+  const r = CY_RANGO;
+  abrirModal(`<h3>💵 Pasar Yape a caja</h3>
+    <p class="muted" style="font-size:13px;margin-bottom:10px">Yapes de <b>${fechaHora(r.ini)}</b> a <b>${fechaHora(r.fin)}</b>: <b>${S(r.total)}</b>.<br>
+    Al guardar, ese dinero deja de figurar en Yape y pasa al efectivo de la caja. La próxima vez se empezará a contar desde ${fechaHora(siguienteDesde(r.fin))}.</p>
+    <div class="fld"><label>Monto que se pasa a la caja (S/)</label><input id="trMonto" type="number" step="0.05" min="0" value="${r.total.toFixed(2)}"></div>
+    <p class="muted" style="font-size:11px;margin-bottom:10px">Si pasas menos, lo que no pases sigue figurando en Yape.</p>
+    <div class="row"><button class="btn sec grow" onclick="cerrarModal()">Cancelar</button><button class="btn grow" id="trOk" onclick="guardarTraspaso()">Pasar a caja</button></div>`);
+}
+async function guardarTraspaso(){
+  const r = CY_RANGO, monto = Math.round((parseFloat(document.getElementById('trMonto').value)||0)*100)/100;
+  if(!(monto>0)) return toast('Ingresa el monto');
+  if(monto > r.total + 0.001 && !confirm(`Vas a pasar ${S(monto)}, más que los ${S(r.total)} del rango. ¿Seguro?`)) return;
+  document.getElementById('trOk').disabled = true;
+  try{
+    await sb('POST', {}, { tipo:'mov_caja', data:{ tipo:'traspaso', metodo:'YAPE→EFECTIVO', monto, total_rango:Math.round(r.total*100)/100,
+      desde:r.ini, hasta:r.fin, fecha:ahoraISO(), usuario:USER.nombre, concepto:'Yape pasado a caja' } });
+    cerrarModal(); toast('✅ '+S(monto)+' pasados de Yape a la caja');
+    await cargarTraspasos(); await cyDesdeUltimo(true); cyHastaAhora();
+  }catch(e){ document.getElementById('trOk').disabled = false; toast('❌ Error: '+e.message); }
+}
+async function borrarTraspaso(id){
+  const t = TRAS.find(x=>x.id===id); if(!t) return;
+  if(!confirm(`¿Deshacer el traspaso de ${S(t.data.monto)} del ${fechaHora(t.data.fecha)}? El dinero volverá a figurar en Yape.`)) return;
+  await sb('DELETE', { id:'eq.'+id }); toast('Traspaso deshecho');
+  await cargarTraspasos(); if(!(await cyDesdeUltimo(true))) {} cargarYapeRango();
+}
 async function cargarYapeRango(){
   const f1 = document.getElementById('cyDesde').value, f2 = document.getElementById('cyHasta').value;
   const h1 = document.getElementById('cyHoraDesde').value || '00:00', h2 = document.getElementById('cyHoraHasta').value || '23:59';
   if(!f1 || !f2 || (f2+h2) < (f1+h1)){ document.getElementById('cyRes').innerHTML=''; CY_CACHE=[]; toast('Revisa las fechas y horas: el inicio es después del final'); return; }
   document.getElementById('cyRes').innerHTML = '<div class="card muted">Calculando…</div>';
-  const { yapes, cierres } = await yapesEntre(f1, f2, h1, h2);
+  // nunca cubrir el futuro: si "hasta" llega al minuto actual, se corta al final del minuto anterior
+  // (lo que entre en este minuto o después va al siguiente traspaso, que empezará en este minuto exacto)
+  const ini = f1+'T'+h1+':00', ahoraMin = ahoraISO().slice(0,16);
+  let fin = f2+'T'+h2+':59';
+  if(fin.slice(0,16) >= ahoraMin){ const d = new Date(ahoraMin+':00'); d.setSeconds(d.getSeconds()-1); fin = isoLocal(d); }
+  const [{ yapes, cierres }] = await Promise.all([ yapesEntre(f1, f2, h1, h2, fin), cargarTraspasos() ]);
   CY_CACHE = yapes;
+  const solape = TRAS.find(t=>t.data.hasta >= ini && t.data.desde <= fin);
   const conHora = h1!=='00:00' || h2!=='23:59';
+  CY_RANGO = { ini, fin, total: Math.round(yapes.reduce((t,y)=>t+y.monto,0)*100)/100 };
   const porDia = {};
   yapes.forEach(y=>{ const d = y.fecha.slice(0,10); (porDia[d] = porDia[d] || []).push(y); });
   const cierreDe = {}; cierres.forEach(c=>{ cierreDe[c.data.fecha] = c.data; });
@@ -1282,11 +1359,13 @@ async function cargarYapeRango(){
   const conDif = dias.filter(d=>cierreDe[d] && !cierreDe[d].conforme).length;
   document.getElementById('cyRes').innerHTML = `
     <div class="card">
-      <div class="row" style="justify-content:space-between"><span class="muted">${yapes.length} yapes · ${fechaCorta(f1)}${conHora?' '+h1:''} al ${fechaCorta(f2)}${conHora?' '+h2:''}</span><b class="sora" style="font-size:22px;color:var(--yape)">${S(total)}</b></div>
+      <div class="row" style="justify-content:space-between"><span class="muted">${yapes.length} yapes · ${fechaCorta(f1)}${conHora?' '+h1:''} al ${fechaCorta(fin.slice(0,10))}${conHora?' '+fin.slice(11,16):''}</span><b class="sora" style="font-size:22px;color:var(--yape)">${S(total)}</b></div>
       <div class="row" style="justify-content:space-between;font-size:13px;margin-top:6px"><span>De ventas</span><b>${S(total-deFiados)}</b></div>
       <div class="row" style="justify-content:space-between;font-size:13px"><span>De pagos de fiados</span><b>${S(deFiados)}</b></div>
       ${conHora && yapes.length?`<div class="muted" style="font-size:12px;margin-top:6px">Primer yape ${f1!==f2?fechaCorta(yapes[0].fecha.slice(0,10))+' ':''}${yapes[0].fecha.slice(11,16)} · último ${f1!==f2?fechaCorta(yapes[yapes.length-1].fecha.slice(0,10))+' ':''}${yapes[yapes.length-1].fecha.slice(11,16)}</div>`:''}
       ${sinCierre?`<div class="neg" style="font-size:13px;margin-top:8px">⚠ ${sinCierre} día(s) con yapes sin cierre registrado</div>`:''}
+      ${solape?`<div class="neg" style="font-size:13px;margin-top:8px">⚠ Este rango incluye yapes que ya se pasaron a caja el ${fechaHora(solape.data.fecha)} (cubrió ${fechaHora(solape.data.desde)} → ${fechaHora(solape.data.hasta)}). Usa “↪ Desde el último traspaso”.</div>`
+        : (total>0?`<button class="btn" style="width:100%;margin-top:10px" onclick="modalTraspaso()">💵 Pasar estos ${S(total)} a caja</button>`:'')}
       ${conDif?`<div class="neg" style="font-size:13px;margin-top:4px">⚠ ${conDif} día(s) cerrados con diferencia</div>`:''}
     </div>
     <div class="scroll"><table>
