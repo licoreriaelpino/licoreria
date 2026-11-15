@@ -144,7 +144,7 @@ canvas{width:100%;background:var(--panel);border:1px solid var(--line);border-ra
   <div id="pinPad"></div>
   <div id="loginMsg"></div>
   <div id="huellaBox"></div>
-  <div id="verTxt">versión 23 · precio por cantidad</div>
+  <div id="verTxt">versión 24 · abrir cajetilla</div>
 </div>
 
 <div id="app">
@@ -998,6 +998,7 @@ async function cobrar(){
       await sb('POST', {}, { tipo:'fiado', data:{ cliente:clienteFiado, venta_id:ventaRes[0].id,
         items, total, saldo:total, fecha:ahoraISO(), pagos:[], usuario:USER.nombre } });
     }
+    await abrirSiFaltan(items);
     for(const it of items){
       if(it.tipo==='producto') await ajustarStock(it.id, -it.cantidad, it.variante);
       else for(const comp of it.componentes) await ajustarStock(comp.producto_id, -comp.cantidad*it.cantidad, comp.variante);
@@ -1007,6 +1008,71 @@ async function cobrar(){
     CART=[]; renderCart(); renderGrid(); setMetodo('EFECTIVO');
   }catch(e){ toast('❌ Error: '+e.message); }
   btn.disabled=false;
+}
+/* ---- Abrir cajetilla: la Caja baja 1 y la Unidad sube N (del mismo color) ----
+   La "Unidad" guarda abre_de = { caja_id, unidades }. */
+function stockVar(p, variante){
+  if(!p) return 0;
+  if(tieneVars(p)){ if(!variante) return stockDe(p); const v = p.variantes.find(x=>x.nombre===variante); return v ? Number(v.stock)||0 : 0; }
+  return Number(p.stock)||0;
+}
+function varCajaPara(caja, variante){ // qué color de caja se abre para ese color de unidad
+  if(!tieneVars(caja)) return { ok: (Number(caja.stock)||0) > 0, var:null };
+  if(variante){ const v = caja.variantes.find(x=>x.nombre===variante); return { ok: !!v && (Number(v.stock)||0) > 0, var: v ? v.nombre : null, falta: !v }; }
+  const v = [...caja.variantes].sort((a,b)=>(Number(b.stock)||0)-(Number(a.stock)||0))[0];
+  return { ok: !!v && (Number(v.stock)||0) > 0, var: v ? v.nombre : null };
+}
+async function abrirCajetillas(unidadId, variante, n, auto){
+  const u = PROD.get(unidadId), cfg = u && u.abre_de, caja = cfg && PROD.get(cfg.caja_id);
+  if(!caja) return 0;
+  const k = Number(cfg.unidades)||20; let abiertas = 0;
+  for(let i=0;i<n;i++){
+    const vc = varCajaPara(caja, variante);
+    if(!vc.ok) break;
+    await ajustarStock(caja.id, -1, vc.var);
+    if(variante && tieneVars(u) && !u.variantes.find(x=>x.nombre===variante)) u.variantes.push({ nombre:variante, stock:0 });
+    // costo de la unidad: promedio ponderado con lo que trae la cajetilla (costo de caja / unidades)
+    const cu = (Number(caja.costo_promedio)||0) / k, stU = Math.max(0, stockDe(u));
+    if(cu > 0){ u.costo_promedio = +(((Number(u.costo_promedio)||0)*stU + cu*k) / (stU + k)).toFixed(4); u.ultimo_costo = +cu.toFixed(4); u.costo_conocido = true; }
+    await ajustarStock(u.id, k, variante);
+    await sb('POST', {}, { tipo:'apertura', data:{ fecha:ahoraISO(), caja_id:caja.id, caja:caja.nombre, unidad_id:u.id, unidad:u.nombre,
+      variante:variante||vc.var||null, variante_caja:vc.var, unidades:k, usuario:USER.nombre, auto:!!auto } });
+    abiertas++;
+  }
+  return abiertas;
+}
+async function abrirSiFaltan(items){ // antes de descontar una venta: si no alcanzan los sueltos, abre cajetillas solas
+  const avisos = [];
+  for(const it of items){
+    if(it.tipo!=='producto') continue;
+    const u = PROD.get(it.id); if(!u || !u.abre_de) continue;
+    const falta = it.cantidad - stockVar(u, it.variante);
+    if(falta <= 0) continue;
+    const k = Number(u.abre_de.unidades)||20, n = Math.ceil(falta / k);
+    const ab = await abrirCajetillas(u.id, it.variante, n, true);
+    const cajaN = (PROD.get(u.abre_de.caja_id)||{}).nombre || 'la caja';
+    if(ab) avisos.push(`📦 Se abrió ${ab} cajetilla${ab>1?'s':''} de ${cajaN}${it.variante?' ('+it.variante+')':''}`);
+    if(ab < n) avisos.push(`⚠ No hay cajetillas${it.variante?' '+it.variante:''} en stock de ${cajaN}: ${u.nombre} queda en negativo`);
+  }
+  if(avisos.length) setTimeout(()=>toast(avisos.join(' · ')), 1200);
+}
+function modalAbrir(unidadId){
+  const u = PROD.get(unidadId), caja = PROD.get(u.abre_de.caja_id); if(!caja) return toast('No se encontró la caja de este producto');
+  const colores = tieneVars(caja) ? caja.variantes : [];
+  abrirModal(`<h3>📦 Abrir cajetilla</h3>
+    <p class="muted" style="font-size:13px;margin-bottom:10px">${esc(caja.nombre)} baja 1 y ${esc(u.nombre)} sube ${u.abre_de.unidades} por cada cajetilla.</p>
+    ${colores.length?`<div class="fld"><label>Color</label><select id="abVar">${colores.map(v=>`<option value="${esc(v.nombre)}">${esc(v.nombre)} — ${v.stock||0} cajetillas</option>`).join('')}</select></div>`:''}
+    <div class="fld"><label>¿Cuántas cajetillas abres?</label><input id="abN" type="number" min="1" step="1" value="1"></div>
+    <div class="row"><button class="btn sec grow" onclick="cerrarModal()">Cancelar</button><button class="btn grow" id="abOk" onclick="confirmarAbrir('${u.id}')">Abrir</button></div>`);
+}
+async function confirmarAbrir(uid){
+  const n = parseInt(document.getElementById('abN').value)||0; if(n<1) return toast('Pon cuántas cajetillas');
+  const sel = document.getElementById('abVar'), variante = sel ? sel.value : null;
+  document.getElementById('abOk').disabled = true;
+  const ab = await abrirCajetillas(uid, variante, n, false);
+  cerrarModal();
+  toast(ab ? `📦 ${ab} cajetilla${ab>1?'s':''} abierta${ab>1?'s':''}${ab<n?' (no había más en stock)':''}` : '⚠ No hay cajetillas de ese color en stock');
+  renderInv(); renderGrid && renderGrid();
 }
 async function ajustarStock(prodId, delta, variante){
   const p = PROD.get(prodId); if(!p) return;
@@ -1518,12 +1584,22 @@ async function guardarConteo(){
     abrirInventario();
   }catch(e){ toast('❌ Error: '+e.message); }
 }
+async function pintarAperturas(){
+  const box = document.getElementById('ivAper'); if(!box) return;
+  const rows = (await sbAll({ select:'data', tipo:'eq.apertura' })).map(r=>r.data).sort((a,b)=>b.fecha.localeCompare(a.fecha));
+  const mes = hoyISO().slice(0,7), delMes = rows.filter(r=>r.fecha.startsWith(mes));
+  box.innerHTML = rows.length ? `<div class="card"><h2 style="font-size:15px;margin-bottom:6px">📦 Cajetillas abiertas</h2>
+    <div class="muted" style="font-size:12px;margin-bottom:6px">Este mes: ${delMes.length}</div>
+    ${rows.slice(0,15).map(r=>`<div class="citem" style="font-size:12px"><span class="grow">${esc(r.caja)}${r.variante?' · '+esc(r.variante):''} → +${r.unidades} sueltos</span>
+      <span class="muted">${fechaHora(r.fecha)} · ${esc(r.usuario||'')}${r.auto?' · al vender':''}</span></div>`).join('')}</div>` : '';
+}
 function pintarHistorialConteos(){
   const admin = USER.rol==='admin';
   const mes = hoyISO().slice(0,7);
   const delMes = CONTEOS.filter(c=>(c.data.fecha||'').startsWith(mes) && !c.data.inicial);
   const faltMes = delMes.reduce((s,c)=>s+(c.data.items||[]).filter(i=>i.diferencia<0).reduce((a,i)=>a+i.diferencia*i.costo_unit,0),0);
-  document.getElementById('ivHist').innerHTML =
+  setTimeout(pintarAperturas, 0);
+  document.getElementById('ivHist').innerHTML = '<div id="ivAper"></div>' +
     (admin ? `<div class="card"><div class="row" style="justify-content:space-between"><span class="muted">Faltantes de este mes (al costo)</span><b class="sora neg">${S(faltMes)}</b></div></div>` : '') +
     (CONTEOS.map(c=>{
       const d = c.data; const difs = (d.items||[]).filter(i=>i.diferencia!==0);
@@ -2337,7 +2413,7 @@ async function renderInv(){
   let valor = 0;
   const admin = USER.rol==='admin';
   document.getElementById('invTable').innerHTML =
-    `<tr><th>Producto</th><th class="right">Stock</th><th class="right">Alcanza</th><th class="right">C. prom</th><th class="right">Últ. costo</th><th class="right">Precio</th><th class="right">Margen</th>${admin?'<th></th>':''}</tr>` +
+    `<tr><th>Producto</th><th class="right">Stock</th><th class="right">Alcanza</th><th class="right">C. prom</th><th class="right">Últ. costo</th><th class="right">Precio</th><th class="right">Margen</th>${'<th></th>'}</tr>` +
     rows.map(({p, nv})=>{
       const st = stockDe(p);
       valor += (st>0?st:0)*(p.costo_promedio||0);
@@ -2353,7 +2429,8 @@ async function renderInv(){
         <td class="right muted">${p.ultimo_costo?S(p.ultimo_costo):'–'}</td>
         <td class="right">${S(p.precio_venta)}</td>
         <td class="right ${mg!==null&&mg<MARGEN_MIN?'neg':'pos'}">${mg===null?'–':mg.toFixed(0)+'%'}</td>
-        ${admin?`<td class="right"><button class="btn sec sm" onclick="modalProducto('${p.id}')">Editar</button></td>`:''}</tr>`;
+        ${admin?`<td class="right" style="white-space:nowrap">${p.abre_de?`<button class="btn sec sm" onclick="modalAbrir('${p.id}')" title="Abrir cajetilla">📦</button> `:''}<button class="btn sec sm" onclick="modalProducto('${p.id}')">Editar</button></td>`
+          : (p.abre_de?`<td class="right"><button class="btn sec sm" onclick="modalAbrir('${p.id}')">📦 Abrir</button></td>`:'<td></td>')}</tr>`;
     }).join('') + (rows.length?'':'<tr><td colspan="8" class="muted">No hay productos con ese filtro.</td></tr>');
   document.getElementById('invValor').textContent = S(valor);
 }
@@ -2366,6 +2443,10 @@ function modalProducto(id){
       <div class="fld grow"><label>Precio de venta S/</label><input id="fPre" type="number" step="0.1" value="${p.precio_venta}"></div>
       <div class="fld grow"><label>Stock (sin variantes)</label><input id="fStk" type="number" step="1" value="${tieneVars(p)?stockDe(p):(p.stock??0)}" ${tieneVars(p)?'disabled':''}></div>
     </div>
+    <div class="fld"><label>📦 Se vende suelto de una caja (opcional)</label>
+      <div class="row" style="gap:6px;align-items:center"><select id="fAbreCaja" class="grow"><option value="">— No —</option>${[...PROD.values()].filter(x=>x.id!==id && x.activo!==false).sort((a,b)=>a.nombre.localeCompare(b.nombre)).map(x=>`<option value="${x.id}" ${p.abre_de&&p.abre_de.caja_id===x.id?'selected':''}>${esc(x.nombre)}</option>`).join('')}</select>
+      <input id="fAbreN" type="number" min="1" step="1" style="width:70px" value="${p.abre_de?p.abre_de.unidades:20}"><span class="muted" style="font-size:12px">unid.</span></div>
+      <div class="muted" style="font-size:11px;margin-top:4px">Ej. Unidad Cigarro Lucky Mora → Caja Cigarros Lucky Mora, 20 unid. Si al vender no quedan sueltos, se abre una cajetilla sola.</div></div>
     <div class="fld"><label>🏷 Precio por cantidad (opcional)</label>
       <div class="row" style="gap:6px;align-items:center"><input id="fOfQ" type="number" step="1" min="2" placeholder="Ej: 2" style="width:80px" value="${p.oferta?p.oferta.cantidad:''}">
       <span class="muted" style="font-size:13px">unidades por S/</span><input id="fOfP" type="number" step="0.05" min="0" placeholder="Ej: 0.50" style="width:90px" value="${p.oferta?p.oferta.precio:''}"></div>
@@ -2425,6 +2506,9 @@ async function guardarProducto(id){
     costo_promedio:parseFloat(document.getElementById('fCos').value)||0,
     variantes:window._vars,
     activo:document.getElementById('fAct').checked };
+  const abC = document.getElementById('fAbreCaja').value, abN = parseInt(document.getElementById('fAbreN').value)||0;
+  if(abC && abN < 1) return toast('Pon cuántas unidades trae la caja');
+  data.abre_de = abC ? { caja_id:abC, unidades:abN } : null;
   const ofQ = parseInt(document.getElementById('fOfQ').value)||0, ofP = parseFloat(document.getElementById('fOfP').value)||0;
   if(ofQ || ofP){
     if(ofQ < 2 || !(ofP > 0)) return toast('Precio por cantidad: pon cuántas unidades (2 o más) y el precio');
