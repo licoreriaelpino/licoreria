@@ -144,7 +144,7 @@ canvas{width:100%;background:var(--panel);border:1px solid var(--line);border-ra
   <div id="pinPad"></div>
   <div id="loginMsg"></div>
   <div id="huellaBox"></div>
-  <div id="verTxt">versión 22 · yape a caja</div>
+  <div id="verTxt">versión 23 · precio por cantidad</div>
 </div>
 
 <div id="app">
@@ -775,7 +775,7 @@ function renderGrid(){
     const st = stockDe(p);
     const b=document.createElement('button'); b.className='pbtn'+(st<=0?' nostock':'');
     const extra = tieneVars(p) ? ` · ${p.variantes.length} sabores` : '';
-    b.innerHTML=`<span class="nm">${esc(p.nombre)}</span><span class="pr">${S(p.precio_venta)}</span><span class="st">Stock: ${st}${extra}</span>`;
+    b.innerHTML=`<span class="nm">${esc(p.nombre)}</span><span class="pr">${S(p.precio_venta)}${ofertaDe(p)?`<span style="font-size:12px;font-weight:600"> · ${ofertaDe(p).cantidad} x ${S(ofertaDe(p).precio)}</span>`:''}</span><span class="st">Stock: ${st}${extra}</span>`;
     b.onclick=()=>agregarCart(p.id,'producto');
     g.appendChild(b);
   });
@@ -855,7 +855,27 @@ function pushCart(item){
   else CART.push(item);
   renderCart();
 }
+/* ---- Precio por cantidad (ej. Chiclets: 1 a S/0.30, 2 por S/0.50) ----
+   Se agrupa por producto (sumando sabores): cada grupo de N unidades cobra el precio de oferta, las sueltas el normal.
+   Cada línea guarda el precio unitario promedio, así precio_unit × cantidad suma exacto el subtotal. */
+function ofertaDe(p){ const o = p && p.oferta; return (o && Number(o.cantidad)>=2 && Number(o.precio)>0) ? { cantidad:Number(o.cantidad), precio:Number(o.precio) } : null; }
+function subtotalOferta(q, base, o){ return o ? Math.floor(q/o.cantidad)*o.precio + (q%o.cantidad)*base : q*base; }
+function aplicarOfertas(lineas, qtyK, precioK, getOferta, getBase){
+  const grupos = {};
+  lineas.forEach(l=>{ if(l.tipo!=='producto') return; const o = getOferta(l); if(!o) return; (grupos[l.id] = grupos[l.id] || { o, base:getBase(l), ls:[] }).ls.push(l); });
+  Object.values(grupos).forEach(g=>{
+    const q = g.ls.reduce((t,l)=>t+Number(l[qtyK]),0); if(!q) return;
+    const unit = subtotalOferta(q, g.base, g.o) / q;
+    g.ls.forEach(l=>{ l[precioK] = unit; l.oferta = { cantidad:g.o.cantidad, precio:g.o.precio, base:g.base }; });
+  });
+  lineas.forEach(l=>{ if(l.tipo==='producto' && !getOferta(l) && l.oferta){ l[precioK] = l.oferta.base; delete l.oferta; } });
+}
+function ofertasCart(){
+  CART.forEach(c=>{ if(c.tipo!=='combo' && c.precio_base==null) c.precio_base = c.precio; });
+  aplicarOfertas(CART, 'cantidad', 'precio', c=>ofertaDe(PROD.get(c.id)), c=>c.precio_base);
+}
 function renderCart(){
+  ofertasCart();
   const bar = document.getElementById('cartBar');
   bar.classList.toggle('hide', CART.length===0);
   const box = document.getElementById('cartItems'); box.innerHTML='';
@@ -865,7 +885,7 @@ function renderCart(){
     const d=document.createElement('div'); d.className='citem';
     const nom = c.tipo==='combo'
       ? `🎁 ${esc(c.nombre)}${c.custom?' <span class="tag warn">mod.</span>':''} <button class="tag" onclick="modalPersonalizar(${i})" style="cursor:pointer">✎ Personalizar</button>${c.comp && saboresTxt(c.comp)?`<br><span class="muted" style="font-size:11px;cursor:pointer" onclick="cambiarSaboresCart(${i})">🍹 ${saboresTxt(c.comp)} · cambiar</span>`:''}`
-      : `${esc(c.nombre)}${c.variante?` <span class="tag">${esc(c.variante)}</span>`:''}`;
+      : `${esc(c.nombre)}${c.variante?` <span class="tag">${esc(c.variante)}</span>`:''}${c.oferta && Math.abs(c.precio-c.oferta.base)>0.0001?` <span class="tag" style="color:var(--amber)">${c.oferta.cantidad} x ${S(c.oferta.precio)}</span>`:''}`;
     d.innerHTML=`<span class="grow">${nom}</span>
       <button class="qbtn" onclick="qty(${i},-1)">−</button><b>${c.cantidad}</b>
       <button class="qbtn" onclick="qty(${i},1)">+</button>
@@ -898,7 +918,7 @@ async function cargarSugeridosFiado(){
   const nombres = [...new Set(rows.map(r=>r.data.cliente))].sort();
   document.getElementById('fiadoSugeridos').innerHTML = nombres.map(n=>`<option value="${esc(n)}">`).join('');
 }
-function totalCart(){ return CART.reduce((s,c)=>s+c.precio*c.cantidad,0); }
+function totalCart(){ ofertasCart(); return Math.round(CART.reduce((s,c)=>s+c.precio*c.cantidad,0)*100)/100; }
 function mixAuto(cual){
   const total = totalCart();
   const efe = document.getElementById('mixEfe'), yap = document.getElementById('mixYap');
@@ -969,7 +989,7 @@ async function cobrar(){
           precio_unit:c.precio, costo_unit:costoCombo(comp), componentes:comp };
       }
       return { id:c.id, nombre:c.nombre, variante:c.variante||null, tipo:'producto', cantidad:c.cantidad,
-        precio_unit:c.precio, costo_unit:(PROD.get(c.id).costo_promedio||0) };
+        precio_unit:c.precio, costo_unit:(PROD.get(c.id).costo_promedio||0), ...(c.oferta?{ oferta:c.oferta }:{}) };
     });
     const costo_total = items.reduce((s,i)=>s+i.costo_unit*i.cantidad,0);
     const ventaRes = await sb('POST', {}, { tipo:'venta', data:{ items, total, costo_total, metodo:METODO, pago,
@@ -1993,9 +2013,13 @@ async function editarVenta(id){
   evMetodo(window._ev.metodo, true);
   evPintar();
 }
-function evTotal(){ return +window._ev.items.reduce((t,i)=>t + Number(i.precio_unit)*Number(i.cantidad), 0).toFixed(2); }
+function evOfertas(){
+  aplicarOfertas(window._ev.items, 'cantidad', 'precio_unit',
+    i=>i.oferta ? { cantidad:i.oferta.cantidad, precio:i.oferta.precio } : null, i=>i.oferta.base);
+}
+function evTotal(){ evOfertas(); return +window._ev.items.reduce((t,i)=>t + Number(i.precio_unit)*Number(i.cantidad), 0).toFixed(2); }
 function evPintar(){
-  const ev = window._ev;
+  const ev = window._ev; evOfertas();
   document.getElementById('evItems').innerHTML = ev.items.map((it,i)=>`<div class="citem">
       <span class="grow">${it.tipo==='combo'?'🎁 ':''}${esc(it.nombre)}${it.variante?' <span class="muted">('+esc(it.variante)+')</span>':''}<br><span class="muted" style="font-size:11px">${S(it.precio_unit)} c/u</span></span>
       <button class="btn sec sm" onclick="evCant(${i},-1)">−</button><b style="min-width:26px;text-align:center">${it.cantidad}</b><button class="btn sec sm" onclick="evCant(${i},1)">＋</button>
@@ -2031,7 +2055,9 @@ function evAgregar(){
     const variante = tieneVars(p) ? document.getElementById('evVar').value : null;
     const ex = ev.items.find(i=>i.tipo==='producto' && i.id===p.id && (i.variante||null)===variante);
     if(ex) ex.cantidad++;
-    else ev.items.push({ id:p.id, nombre:p.nombre, variante, tipo:'producto', cantidad:1, precio_unit:Number(p.precio_venta), costo_unit:Number(p.costo_promedio)||0 });
+    else { const o = ofertaDe(p) || (ev.items.find(i=>i.id===p.id && i.oferta)||{}).oferta;
+      ev.items.push({ id:p.id, nombre:p.nombre, variante, tipo:'producto', cantidad:1, precio_unit:Number(p.precio_venta), costo_unit:Number(p.costo_promedio)||0,
+        ...(o?{ oferta:{ cantidad:o.cantidad, precio:o.precio, base:o.base??Number(p.precio_venta) } }:{}) }); }
   }
   document.getElementById('evAdd').value=''; syncCombo('evAdd'); evVarOpts(); evPintar();
 }
@@ -2340,6 +2366,10 @@ function modalProducto(id){
       <div class="fld grow"><label>Precio de venta S/</label><input id="fPre" type="number" step="0.1" value="${p.precio_venta}"></div>
       <div class="fld grow"><label>Stock (sin variantes)</label><input id="fStk" type="number" step="1" value="${tieneVars(p)?stockDe(p):(p.stock??0)}" ${tieneVars(p)?'disabled':''}></div>
     </div>
+    <div class="fld"><label>🏷 Precio por cantidad (opcional)</label>
+      <div class="row" style="gap:6px;align-items:center"><input id="fOfQ" type="number" step="1" min="2" placeholder="Ej: 2" style="width:80px" value="${p.oferta?p.oferta.cantidad:''}">
+      <span class="muted" style="font-size:13px">unidades por S/</span><input id="fOfP" type="number" step="0.05" min="0" placeholder="Ej: 0.50" style="width:90px" value="${p.oferta?p.oferta.precio:''}"></div>
+      <div class="muted" style="font-size:11px;margin-top:4px">Ej. Chiclets: precio 0.30 y aquí “2 unidades por S/ 0.50”. Al vender 3 cobra 0.50 + 0.30. Déjalo vacío si no tiene oferta.</div></div>
     <div class="fld"><label>Costo promedio S/ (se actualiza solo con cada compra)</label><input id="fCos" type="number" step="0.01" value="${p.costo_promedio||0}"></div>
     <div class="fld"><label>🎨 Sabores / variantes (mismo precio, stock propio)</label>
       <div class="row"><input id="fVarNom" placeholder="Ej: Fresa" class="grow"><input id="fVarStk" type="number" placeholder="Stock" style="width:80px"><button class="btn sm" onclick="addVar()">+</button></div>
@@ -2395,6 +2425,12 @@ async function guardarProducto(id){
     costo_promedio:parseFloat(document.getElementById('fCos').value)||0,
     variantes:window._vars,
     activo:document.getElementById('fAct').checked };
+  const ofQ = parseInt(document.getElementById('fOfQ').value)||0, ofP = parseFloat(document.getElementById('fOfP').value)||0;
+  if(ofQ || ofP){
+    if(ofQ < 2 || !(ofP > 0)) return toast('Precio por cantidad: pon cuántas unidades (2 o más) y el precio');
+    if(ofP >= ofQ*data.precio_venta && !confirm(`${ofQ} por ${S(ofP)} no es más barato que ${ofQ} × ${S(data.precio_venta)}. ¿Guardar igual?`)) return;
+    data.oferta = { cantidad:ofQ, precio:ofP };
+  } else data.oferta = null;
   data.stock = window._vars.length ? window._vars.reduce((s,v)=>s+(Number(v.stock)||0),0) : (parseFloat(document.getElementById('fStk').value)||0);
   data.costo_conocido = data.costo_promedio > 0;
   if(!data.nombre) return toast('Ponle nombre al producto');
